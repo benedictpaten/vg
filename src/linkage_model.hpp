@@ -698,6 +698,19 @@ public:
         bool known = false;       ///< false when the parent's settled pair could not be read
     };
 
+    /// The ONE derivation, so that "computed where it is consumed" does not become "computed
+    /// twice, differently". There are two consumers -- the barrier, which needs the copy count to
+    /// revise a child's ploidy, and the nested-strand pass, which needs the carrying traversal --
+    /// and they read the settled pair from different places: the barrier from the child's
+    /// `PhaseCall`, the strand pass from the parent's `Entry`. Both are the same pair, and they
+    /// were measured to agree on every one of chr20's 11,700 nested children. Nothing enforced it:
+    /// each had its own copy of the arithmetic, and the barrier's comment still described the
+    /// deleted `Entry::parent_trav` as if the answer were stored and shared.
+    ///
+    /// `trav_b` is -1 for a haploid parent, which is not the same as a parent whose second
+    /// traversal happens to be absent: the caller says which by passing it or not.
+    static Relation relate_to_parent(uint64_t crossing, int trav_a, int trav_b);
+
 
     /// Whether an active (non-retracted) entry exists for this key. The barrier needs to tell
     /// "this site was never recorded" from "an entry is already in the layer for it":

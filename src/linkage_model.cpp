@@ -141,7 +141,7 @@ static inline void render_phase_pair(const vector<int8_t>& allele_arena, size_t 
 ///
 /// The mask is in TRAVERSAL terms, so it must be tested against the traversals and never against a
 /// compact allele index -- the two agree only when every allele at the parent is panel-carried.
-static inline LinkageCollector::Relation relate_to_parent(uint64_t crossing, int ta, int tb) {
+LinkageCollector::Relation LinkageCollector::relate_to_parent(uint64_t crossing, int ta, int tb) {
     LinkageCollector::Relation r;
     if (ta < 0 || crossing == 0) {
         return r;   // nothing settled, or descent could not compute the mask
@@ -1962,7 +1962,7 @@ size_t LinkageCollector::resolve_generation(
                                ? traversal_of(trav_arena, parent.trav_offset, parent.num_alleles,
                                               parent.final_j)
                                : -1;
-            return relate_to_parent(child.parent_crossing, ta, tb);
+            return LinkageCollector::relate_to_parent(child.parent_crossing, ta, tb);
         };
 
         // (parent, chain), where the chain half is its boundary pair from the graph. A snarl the

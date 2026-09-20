@@ -7024,21 +7024,29 @@ void FlowCaller::run_deferred_descent() {
             // The settled pair as traversals, because that is what the mask indexes. Testing the
             // compact allele index here retracted 3,615 chains against a true 190 on chr20: the two
             // agree only when every allele at the parent is panel-carried.
-            bool first = parent.trav_first >= 0 && parent.trav_first < 64
-                         && ((pr.parent_crossing >> parent.trav_first) & 1);
-            bool second = parent.ploidy == 2 && parent.trav_second >= 0 && parent.trav_second < 64
-                          && ((pr.parent_crossing >> parent.trav_second) & 1);
-            int copies = (int)first + (int)second;
+            //
+            // Through `LinkageCollector::relate_to_parent`, which is also what the nested-strand
+            // pass uses. This used to be a second copy of the same arithmetic, reading the settled
+            // pair from the child's PhaseCall while the strand pass read it from the parent's
+            // Entry. The two agreed on every one of chr20's 11,700 nested children -- measured --
+            // but only by luck: two copies of a derivation are exactly what `Entry::parent_trav`
+            // was deleted for, and a copy count and a carrying traversal that disagree is a nested
+            // site called at the wrong ploidy or stamped with a haplotype it is not on.
+            const LinkageCollector::Relation rel = LinkageCollector::relate_to_parent(
+                pr.parent_crossing, parent.trav_first,
+                parent.ploidy == 2 ? parent.trav_second : -1);
+            int copies = (int)rel.copies;
 
-            // The one derivation. Which of the parent's settled traversals carries this chain is the
-            // same fact as how many copies of it the sample has, so both come from `first`/`second`
-            // and nothing downstream re-decides either. Recorded even when the ploidy needs no
-            // change: the descent-time value was computed against the parent's *pre-linkage*
-            // genotype, and leaving it stale is what let the phasing pass and the barrier disagree
-            // about a chain neither had any reason to doubt.
-            // -1 means no settled traversal carries the chain; -2 means both do. Both are recorded
-            // here rather than recomputed when the child is phased, which is the point: the count
-            // and the identity come from the same two booleans, so they cannot disagree.
+            // Which of the parent's settled traversals carries this chain is the SAME FACT as how
+            // many copies of it the sample has, so both come out of one call: `copies` here, and
+            // `carrying_trav` where the strand is stamped. -1 means no settled traversal carries
+            // the chain; -2 means both do.
+            //
+            // Derived, not stored -- see `Relation`. The descent-time ploidy was computed against
+            // the parent's *pre-linkage* genotype, so it is re-derived on every barrier pass rather
+            // than trusted; that is what the iteration is for. This comment used to claim the value
+            // was "recorded here rather than recomputed when the child is phased", which described
+            // `Entry::parent_trav` -- deleted precisely because a stored copy went stale.
             if (copies == 0) {
                 // A call on a haplotype the sample turns out not to have -- and everything inside
                 // it is on that same absent haplotype, so the whole subtree goes with it.
