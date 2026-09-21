@@ -295,11 +295,14 @@ struct AnchorParams {
 
     /// Place a read at a HETEROZYGOUS site by its cross-site strand as well as its allele match.
     ///
-    /// Off by default, and the default is a real choice rather than caution. A het site's own
-    /// alleles are evidence about which haplotype a read came from, and letting the accumulated
-    /// strand tilt that evidence makes the anchors agree with the phasing wherever the strand is
-    /// confident -- so they stop being usable as an independent check ON the phasing. That matters
-    /// to a consumer validating an assembly; it does not matter to one building one.
+    /// ON by default, and the default is a real choice rather than caution. The cost is that a
+    /// het site's own alleles are evidence about which haplotype a read came from, and letting the
+    /// accumulated strand tilt that evidence makes the anchors agree with the phasing wherever the
+    /// strand is confident -- so they stop being usable as an independent check ON the phasing.
+    /// That matters to a consumer validating an assembly; it does not matter to one building one,
+    /// which is the consumer this serves. Turn it off with --no-anchors-phase-hets to recover the
+    /// independent check -- and note the hom-split self-check is silent while it is on, for
+    /// exactly that reason.
     ///
     /// What it buys: the slot a read lands in at a het site is otherwise decided afresh at every
     /// site from that site's sequence match alone, so neighbouring sites disagree about a read's
