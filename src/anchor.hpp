@@ -291,7 +291,38 @@ struct AnchorParams {
 
     /// Minimum confidently-placed reads on EACH side before a homozygous site may be split. A site
     /// whose reads all lean one way has not been partitioned, it has been relabelled.
-    size_t phase_min_side = 2;
+    ///
+    /// Fitted on chr20 against SEQUENCE IN A PHASED CHAIN THAT CONTAINS A SWITCH -- a chain running
+    /// over the top-level snarl chain and ending at any homozygote left collapsed. Chain length
+    /// alone is the wrong objective: splitting buys length precisely by merging chains across
+    /// switch errors, so N50 and contaminated sequence move together and the only question is
+    /// where on that curve to sit. Every row below is a real run, read off the anchors file as
+    /// written -- see the warning after the table.
+    ///
+    ///   side |  homs split |     span |      N50 | in a switch-containing chain
+    ///     10 |      73,747 | 58.24 Mb | 737.6 kb |                     3.327 Mb
+    ///     14 |      54,942 | 52.37 Mb | 200.7 kb |                     0.855 Mb
+    ///     18 |      29,965 | 44.49 Mb |  63.3 kb |                     0.283 Mb
+    ///     22 |       9,662 | 38.18 Mb |  25.8 kb |                     0.082 Mb
+    ///   none |           0 | 35.34 Mb |  19.5 kb |                     0.035 Mb
+    ///
+    /// 10 is PROVISIONAL, pending experiments in progress. It is the most permissive of the four
+    /// and buys the longest chains -- 737.6 kb against 19.5 kb unsplit -- at 3.327 Mb of
+    /// contaminated sequence. If that proves too dirty for the consumer, 14 cuts it to 0.855 Mb
+    /// for 5.9 Mb less span and 18 to 0.283 Mb for 13.8 Mb less. Past about 22 the gate is off:
+    /// it splits 9,662 sites for 2.8 Mb of span over not splitting at all.
+    ///
+    /// WARNING for anyone re-fitting this. The gate CANNOT be reconstructed offline from an
+    /// anchors file. It counts `evidence.reads` with a placed pin; the file holds only the reads
+    /// that survived placement, a subset. Recomputing from the file is strictly conservative and
+    /// the bias grows with this parameter -- exact at side 2 (88,576 of 88,585 sites) but 6.5%
+    /// short at side 10, and the sites it misses are the LOW-COVERAGE ones (median 23 reads
+    /// against 41), which are disproportionately the chain-breakers. That turns a 6.5% error in
+    /// the count into a 5x error in N50. Measure the cell you intend to ship with a real run.
+    ///
+    /// This is a raw read count, not depth-normalised, so the same value lands differently on
+    /// contigs of different coverage. See vg-call-eval docs/homsplit-switch-containment.md.
+    size_t phase_min_side = 10;
 
     /// Place a read at a HETEROZYGOUS site by its cross-site strand as well as its allele match.
     ///

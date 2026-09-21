@@ -317,7 +317,7 @@ void help_call(char** argv) {
          << "                            this |log-odds| in NATS. 0.5 is about 62% [0.5]" << endl
          << "      --split-min-side N    confidently placed reads needed on EACH side before" << endl
          << "                            a homozygous site may be split. A site whose reads" << endl
-         << "                            all lean one way has been relabelled, not split [2]" << endl
+         << "                            all lean one way has been relabelled, not split [10]" << endl
          << "      --no-anchors-phase-hets" << endl
          << "                            place a het read by its allele match ALONE." << endl
          << "                            By default the read's accumulated cross-site" << endl

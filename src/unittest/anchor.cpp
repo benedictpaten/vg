@@ -499,6 +499,11 @@ TEST_CASE("A homozygous site splits by read phase only when both strands are sup
     AnchorParams params;
     params.min_reads = 1;
     params.hom_split = true;
+    // Pinned, not inherited. The fixture has four reads, so the shipped default could never be met
+    // and every section below would collapse for the wrong reason -- the two that expect a
+    // collapse would stop testing one-sidedness and start testing an unreachable quota, which is
+    // the shape of a check that cannot fire.
+    params.phase_min_side = 2;
     vector<AnchorWriter::Anchor> out;
 
     SECTION("reads that lean both ways are split into two slots carrying the SAME allele") {
