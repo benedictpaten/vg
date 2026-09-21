@@ -13,16 +13,16 @@ bodies. Where a count appears, it is a count.
 | file pair | lines | what it is |
 |---|---|---|
 | `read_likelihood_caller.{hpp,cpp}` | 980 | the `SnarlCaller` itself: turns a likelihood matrix into a genotype |
-| `allele_likelihood.{hpp,cpp}` | 2,440 | the matrix: `P(read \| allele)` for every read and candidate |
+| `allele_likelihood.{hpp,cpp}` | 2,451 | the matrix: `P(read \| allele)` for every read and candidate |
 | `site_read_source.{hpp,cpp}` | 1,259 | fetching the reads that overlap a site |
-| `linkage_model.{hpp,cpp}` | 3,525 | the Li–Stephens panel model, **and** the site store that drives it |
-| `read_phasing.{hpp,cpp}` | 385 | phasing adjacent sites from reads that span both |
-| `regenotype.{hpp,cpp}` | 755 | re-deciding a genotype from the settled phase |
-| `anchor.{hpp,cpp}` | 1,218 | the anchor output: which reads pin to which allele |
+| `linkage_model.{hpp,cpp}` | 3,573 | the Li–Stephens panel model, **and** the site store that drives it |
+| `read_phasing.{hpp,cpp}` | 568 | phasing adjacent sites from reads that span both |
+| `regenotype.{hpp,cpp}` | 763 | re-deciding a genotype from the settled phase |
+| `anchor.{hpp,cpp}` | 1,420 | the anchor output: which reads pin to which allele |
 | `symbolic_allele.{hpp,cpp}` | 557 | traversal → ALT sequence, and comparison of traversals |
 | `alignment_scorer.{hpp,cpp}` | 909 | the per-base scoring model shared with the mapper |
 
-Nine file pairs, 12,028 lines. `graph_caller.{hpp,cpp}` — 10,474 lines — orchestrates them, and
+Nine file pairs, 12,480 lines. `graph_caller.{hpp,cpp}` — 10,793 lines — orchestrates them, and
 `subcommand/call_main.cpp` wires them to the CLI.
 
 ## The dependency graph, measured
@@ -131,6 +131,14 @@ history put them where they are.
 This is worth saying plainly because it changes what a reorganisation should aim at. Moving nine
 file pairs into a folder tidies the listing and leaves the 61% exactly where it is.
 
+The fraction has since grown rather than shrunk. Re-homing the instrumentation counters off file
+scope — which the review asked for, and which is right on its own terms — added `mosaic_counters`,
+`atomize_counters` and `off_reference_nesting` to this same base class, because the methods that
+use them (`write_mosaic`, `report_atomize_instrumentation`) live here. They are correctly placed
+*given* the current composition and would move with those methods under order-of-work item 5. It
+is a fair illustration of the point: every improvement made inside the current shape makes the
+shape itself slightly worse.
+
 ## Q3 — folders, enclosing classes, or both?
 
 ### Free functions: a real but small problem
@@ -141,12 +149,19 @@ Counting declarations at namespace scope across the family:
 |---|---|
 | `regenotype.hpp` | 8 |
 | `symbolic_allele.hpp` | 5 |
-| `anchor.hpp` | 4 |
+| `anchor.hpp` | 3 |
 | `read_phasing.hpp` | 2 |
 | `linkage_model.hpp` | 1 |
+| `alignment_scorer.hpp` | 1 |
 | `site_read_source.hpp`, `allele_likelihood.hpp`, `read_likelihood_caller.hpp` | 0 |
+| `graph_caller.hpp` (the orchestrator, outside the nine pairs) | 3 |
 
-Twenty functions in five files. The subsystems that already have a class — `SiteReadSource`,
+Twenty functions in six file pairs, plus three in `graph_caller.hpp`. That last figure was **six**
+until the counters work: `enable_off_reference_nesting`, `off_reference_nesting_enabled` and
+`report_atomize_instrumentation` were free functions over file-scope statics, and all three are now
+members. The three that remain — `gl_genotype_index`, `fold_genotype_likelihoods`,
+`buffered_record_key_less` — are pure, and the last is directly unit-tested, which is the reason
+below for leaving pure functions alone. The subsystems that already have a class — `SiteReadSource`,
 `AlleleLikelihoodCalculator`, `LinkageCollector`, `AnchorWriter` — have essentially none, which is
 the pattern to follow rather than invent.
 
@@ -220,7 +235,7 @@ so moving it reaches past #4990's footprint for little gain; it can follow once 
    What blocks the migration is not the options: it is that **`scripts/lint.py` cannot see an
    option that lives in an `OptionGroup`.** It cross-checks `long_options[]`, the getopt string,
    the `switch(c)` block and the helptext, and giraffe survives only by keeping a `long_options`
-   table as well *and* being special-cased (`is_giraffe`, `lint.py:197`). Moving `vg call`'s 61
+   table as well *and* being special-cased (`is_giraffe`, `lint.py:197`). Moving `vg call`'s 72
    read-likelihood options into groups would drop them out of the only check that catches the
    drift this item exists to fix. Extending the linter to understand groups is agreed as the right
    answer and **deliberately deferred out of #4990** (adamnovak, 2026-09-15). Until it lands, the

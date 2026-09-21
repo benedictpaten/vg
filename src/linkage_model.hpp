@@ -12,6 +12,7 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -52,6 +53,39 @@ using namespace std;
  * genotype F1 0.9546 -> 0.9575 and structural-variant F1 0.4655 -> 0.4697 at weight 2, while
  * changing 0.06% of genotypes with GQ >= 40. Small, and larger than nothing.
  */
+/// Instrumentation for the linkage pass, reported under --progress and otherwise inert.
+///
+/// Instance members, not file-scope statics. As statics they were never reset, so two callers in
+/// one process accumulated into the same cells and the second run's numbers were the sum of both
+/// -- the re-entrancy problem #4990's review named. They live on `LinkageModel` rather than
+/// `LinkageCollector` because `window_phasing` is a const method of the model and writes two of
+/// them, while the collector reaches the rest through its own `model` member; `mutable` is what
+/// lets a const method count.
+struct LinkageCounters {
+    /// Per-site pins offered to `window_phasing`, and those it refused because the pinned
+    /// haplotype pair cannot spell the genotype the site is constrained to. A refused pin on a
+    /// group's PARENT frees the whole group's orientation while its haploid siblings stay tied to
+    /// the parent's phase.
+    std::atomic<size_t> pin_applied{0}, pin_declined{0};
+
+    /// Groups whose parent was never offered a pin at all -- no PhaseCall to pin it to.
+    std::atomic<size_t> group_parent_unpinned{0}, group_parent_pinned{0};
+
+    /// Chains left ungrouped, by reason.
+    std::atomic<size_t> grp_no_parent{0}, grp_no_entry{0}, grp_vetoed{0};
+
+    /// Where nested HAPLOID chains ended up. Reported because it is how the population is gated:
+    /// all 44,139 "no strand" sites across chr20, chr6, chr17 and chrX were chrX's and none were
+    /// autosomal, so a bug confined to one of these buckets is invisible to any autosome-only
+    /// check.
+    std::atomic<size_t> nest_strand{0}, nest_one_hap{0};
+
+    /// The two ways a nested haploid chain under a DIPLOID parent ends up on no strand. Counted
+    /// apart because they are different facts with different right answers, and both are empty on
+    /// every contig measured -- so if either ever fires, which one it is decides what to do.
+    std::atomic<size_t> nest_both{0}, nest_unreadable{0};
+};
+
 class LinkageModel {
 public:
 
@@ -334,6 +368,10 @@ public:
         window_posteriors(sites, from, to, out, alpha_in, beta_in);
     }
 
+    /// Instrumentation. `mutable` so the const methods that do the work can count; see
+    /// `LinkageCounters`.
+    mutable LinkageCounters counters;
+
 private:
 
     /// Exact forward-backward over one window. `out` is filled for the whole window; the caller
@@ -362,6 +400,7 @@ private:
     void window_phasing(const vector<Site>& sites, size_t from, size_t to,
                         const vector<size_t>& constraint,
                         size_t pin_index, const Phase& pin, vector<Phase>& out) const;
+
 
     /// Emission over single haplotypes for a haploid site: `e[a]` is the relative likelihood of
     /// the allele haplotype `a` carries, with the wildcard last.

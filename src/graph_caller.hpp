@@ -28,14 +28,6 @@ namespace vg {
 
 /// Descend into nested chains the selected references do not cross.
 ///
-/// Off unless a gref cover is in play (or VG_CALL_NO_REF_NESTED is set). Such a chain has no REF and
-/// no POS against a linear reference, so without a cover its record cannot be written and the
-/// descent buys only its participation in the linkage calculation. A gref fragment gives it a contig
-/// of its own, and then it is reportable like any other site.
-void enable_off_reference_nesting();
-
-/// Whether the above is in effect, so the caller can turn on what only makes sense alongside it.
-bool off_reference_nesting_enabled();
 
 
 using namespace std;
@@ -65,6 +57,31 @@ using ChildTraversalSets = vector<TraversalSet>;
 /**
  * GraphCaller: Use the snarl decomposition to call snarls in a graph
  */
+/// Instrumentation for post-linkage nested descent, reported under --progress and otherwise inert.
+///
+/// Instance members, not file-scope statics. As statics they were never reset, so two callers in
+/// one process accumulated into the same cells and the second run's numbers were the sum of both
+/// -- the re-entrancy problem #4990's review named. `mutable` because the counting and reporting
+/// paths are const.
+struct DescentCounters {
+    /// How deep the descent went, by depth.
+    std::atomic<size_t> depth_hist[16] = {};
+    /// Children skipped for want of a reference path through them, and those recorded anyway
+    /// because the chain the reference does not cross still has reads and a haplotype.
+    std::atomic<size_t> skipped_no_ref{0};
+    std::atomic<size_t> off_reference{0};
+    std::atomic<size_t> no_ref_recorded{0};
+    /// Off-reference chains by copy number: 0, 1, 2.
+    std::atomic<size_t> no_ref_copies[3] = {};
+    /// Children dropped at `copies <= 0` and never reconsidered.
+    std::atomic<size_t> skipped_no_copy{0};
+    /// Children a called traversal enters more than once. Visits after the first are masked: one
+    /// copy for ploidy, and the first crossing for distance. A chain crossed twice by ONE
+    /// traversal is one haplotype carrying two copies, not two haplotypes carrying one each, so it
+    /// must not become ploidy 2.
+    std::atomic<size_t> child_multi_crossing{0};
+};
+
 class GraphCaller {
 public:
 
@@ -84,6 +101,10 @@ public:
     /// why. Stage 0 instrumentation for post-linkage nested descent; see the counters in
     /// graph_caller.cpp. Inert in a run with no symbolic descent.
     void report_descent_instrumentation() const;
+
+    /// Instrumentation for that report. `mutable` so the const paths can count; see
+    /// `DescentCounters`.
+    mutable DescentCounters descent_counters;
 
     /// For every chain, cut it up into pieces using max_edges and max_trivial to cap the size of each piece
     /// then make a fake snarl for each chain piece and call it.  If a fake snarl fails to call,
@@ -199,11 +220,47 @@ bool buffered_record_key_less(const BufferedRecordKey& a, const BufferedRecordKe
 /// retained and rendered after the calling sweep, so anything printed with the descent report
 /// describes only the sites that emitted inline -- which on chr20 is none of them. That mistake
 /// has been made here once already and produced a plausible-looking meaningless number.
-void report_atomize_instrumentation();
+
 
 /**
  * Helper class that vcf writers can inherit from to for some common code to output sorted VCF
  */
+/// Instrumentation for the mosaic writer. Instance members for the reason in `DescentCounters`.
+struct MosaicCounters {
+    /// Runs with no position to walk from. Clipping is ordinary -- only 2 of chr20's 34 panel
+    /// haplotypes are contiguous -- so this is reported, not asserted to be zero.
+    std::atomic<size_t> unwalkable{0};
+    /// Of those, the ones that are only a HEAD: the run resolved from a later site, so the
+    /// walkable remainder is emitted separately instead of being lost with the head.
+    std::atomic<size_t> head_clipped{0};
+    /// Segment boundaries the run's own haplotype could be carried across, and the ones it could
+    /// not, which are what a reference patch or a thread break has to cover.
+    std::atomic<size_t> extended{0}, gap_left{0}, patched{0};
+    /// Rows whose own haplotype does not span them, rewritten as a reference substitution.
+    std::atomic<size_t> row_to_ref{0};
+    /// Run boundaries between a parent and a child snarl, at the child's own boundary nodes.
+    std::atomic<size_t> nested_enter{0}, nested_leave{0};
+    /// Rows the carried direction could not walk but the other could -- an inversion boundary.
+    std::atomic<size_t> direction_broken{0}, extended_left{0};
+};
+
+/// Instrumentation for block emission. Instance members for the reason in `DescentCounters`.
+struct AtomizeCounters {
+    /// Sites that reached `tally_atomize` at all, so the report can tell "nothing refused" from
+    /// "this never ran" -- the two look identical in a counter that only counts refusals.
+    std::atomic<size_t> sites{0};
+    std::atomic<size_t> site_unresolvable{0};  // flip_snarl left projection with no symbols
+    std::atomic<size_t> site_reversed{0};      // resolved only via the reversed pairing
+    /// What the emitter actually did, as opposed to what stage 2 says it could do.
+    std::atomic<size_t> split_sites{0}, split_lines{0};
+    /// Chains whose own record is suppressed because a block ALT already spells them.
+    std::atomic<size_t> child_inlined{0};
+    /// Why `emit_block_records` declined a site, by refusal point. Every one means "the site
+    /// record stands", so this is what "block emission did not fire here" consists of. On chr20
+    /// two reasons are 99.5% of it and six of the ten never fire at all.
+    std::atomic<size_t> refuse[10] = {};
+};
+
 class VCFOutputCaller {
 public:
     VCFOutputCaller(const string& sample_name);
@@ -410,6 +467,20 @@ public:
 
     /// Assume writing nested snarls is enabled
     void set_nested(bool nested);
+
+    /// Genotype and record chains the reference does not cross, instead of skipping them.
+    ///
+    /// Off unless a gref cover is in play, `--anchors-out` asks for it, or VG_CALL_NO_REF_NESTED is
+    /// set. Such a chain has no REF and no POS against a linear reference, so without a cover its
+    /// record cannot be written and the descent buys only its participation in the linkage
+    /// calculation. A gref fragment gives it a contig of its own, and then it is reportable like
+    /// any other site.
+    ///
+    /// Resolved once in `main_call` and set here. It was a file-scope mutable `bool` with free
+    /// `enable_off_reference_nesting()` / `off_reference_nesting_enabled()` accessors, which
+    /// #4990's review named as an anti-pattern: a global controlling a subsystem's BEHAVIOUR, not
+    /// merely its instrumentation. Two callers in one process could not disagree about it.
+    void set_off_reference_nesting(bool on) { off_reference_nesting = on; }
 
     /// How deep in non-reference sequence each gref contig sits, keyed by locus. INFO/CH is at
     /// least this for a record on that contig, whatever its ancestors did.
@@ -656,6 +727,17 @@ protected:
     /// silent, because a record that keeps its per-site GQ where the model moved its genotype is
     /// differently calibrated and nothing else would say so.
     mutable std::atomic<size_t> quality_declined{0};
+
+    /// Instrumentation for the mosaic writer and for block emission. Instance members, so two
+    /// callers in one process count separately; see `DescentCounters`.
+    /// See `set_off_reference_nesting`.
+    bool off_reference_nesting = false;
+
+    mutable MosaicCounters mosaic_counters;
+    mutable AtomizeCounters atomize_counters;
+
+    /// Print the block-emission counters. Was a free function over file-scope statics.
+    void report_atomize_instrumentation() const;
 
     /// Phase by record key, built after the barrier and read while each record is rendered.
     ///

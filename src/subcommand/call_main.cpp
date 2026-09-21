@@ -799,7 +799,7 @@ int main_call(int argc, char** argv) {
     /// INTERIM. A central table of what belongs to whom is not where ownership should live -- each
     /// subsystem should register its own options, Giraffe-style, with `OptionGroup<Receiver>` from
     /// `subcommand/options.hpp`. What blocks that is `scripts/lint.py`, which cannot see an option
-    /// inside an OptionGroup and would stop checking all 61 of these; extending it is agreed and
+    /// inside an OptionGroup and would stop checking all 72 of these; extending it is agreed and
     /// deferred out of #4990. See doc/read-likelihood-architecture.md, "Order of work" item 2.
     enum CallOptionOwner {
         OWN_CORE,               ///< meaningful whatever genotyper is in use
@@ -2161,13 +2161,19 @@ int main_call(int argc, char** argv) {
     //
     // Prefix-selected covers are the normal case (`-P gref_CHM13#0#chr20_`), so this tests the
     // resolved path list rather than the flags.
+    // Resolved once here and handed to the caller, rather than living in a file-scope `bool` with
+    // free accessors -- #4990's review named that as an anti-pattern, and unlike the counters this
+    // one controls scientific output. The env switch is the only way to get the linkage-only arm on
+    // a graph with no cover, which is what the two-arm comparisons are built on.
+    bool off_ref_nesting = getenv("VG_CALL_NO_REF_NESTED") != nullptr;
+
     for (const string& ref_path : ref_paths) {
         // A FRAGMENT, not merely a gref-derived name. The gref copy of a base contig is just the
         // reference under another name and makes nothing new reportable, so selecting it alone must
         // not turn the descent on -- on a graph that ships only the gref view of its reference,
         // which is the ordinary case, that would enable it for every run including the control.
         if (GrefCover::is_gref_name(ref_path)) {
-            enable_off_reference_nesting();
+            off_ref_nesting = true;
             if (show_progress) {
                 logger.info() << "gref reference selected: descending into chains the reference "
                               << "does not cross, and reporting them against their gref contig"
@@ -2188,7 +2194,7 @@ int main_call(int argc, char** argv) {
     // 76,135 het sites to 77,374 with 492 more reliable. Purely additive -- not one of the 172,082
     // existing snarls changed a slot.
     if (!anchors_out.empty() && !no_off_ref_nesting) {
-        enable_off_reference_nesting();
+        off_ref_nesting = true;
         if (show_progress) {
             logger.info() << "anchors requested: descending into chains the reference does not "
                           << "cross, which have no VCF record but do have anchors" << endl;
@@ -2206,7 +2212,7 @@ int main_call(int argc, char** argv) {
     //
     // Keyed by LOCUS, because that is what reaches the VCF's CHROM column.
     map<string, int> gref_levels;
-    if (off_reference_nesting_enabled() && graph != nullptr) {
+    if (off_ref_nesting && graph != nullptr) {
         auto gref_owner = [&](handle_t h) {
             string owner;
             graph->for_each_step_on_handle(h, [&](const step_handle_t& step) {
@@ -2962,7 +2968,8 @@ int main_call(int argc, char** argv) {
         // to every nested record of every existing run, which is a change to make deliberately and
         // measure, not to fold into gref support.
         vcf_caller->set_nested(all_snarls || top_down || bottom_up
-                               || off_reference_nesting_enabled());
+                               || off_ref_nesting);
+        vcf_caller->set_off_reference_nesting(off_ref_nesting);
         vcf_caller->set_gref_levels(std::move(gref_levels));
         vcf_caller->set_translation(translation.get());
 

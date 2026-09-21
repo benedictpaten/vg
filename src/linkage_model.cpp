@@ -14,12 +14,6 @@
 
 namespace vg {
 
-/// Per-site pins offered to window_phasing, and those it refused because the pinned haplotype pair
-/// cannot spell the genotype the site is constrained to. A refused pin on a group's PARENT frees the
-/// whole group's orientation while its haploid siblings stay tied to the parent's phase.
-static std::atomic<size_t> g_pin_applied(0), g_pin_declined(0);
-/// Groups whose parent was never offered a pin at all -- no PhaseCall to pin it to.
-static std::atomic<size_t> g_group_parent_unpinned(0), g_group_parent_pinned(0);
 
 /// The distance between two adjacent sites in a chain, in bp.
 ///
@@ -843,10 +837,10 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
             // free -- while the group's haploid siblings are placed by parent-traversal identity
             // against the parent's own phase. Two frames with nothing relating them, which is the
             // incoherence the strand bookkeeping cannot see because each half is self-consistent.
-            ++g_pin_declined;
+            ++counters.pin_declined;
             continue;
         }
-        ++g_pin_applied;
+        ++counters.pin_applied;
         for (size_t a = 0; a < m; ++a) {
             for (size_t b = 0; b < m; ++b) {
                 if (a != pa || b != pb) {
@@ -1688,16 +1682,6 @@ void LinkageCollector::finish_phase_call(PhaseCall& pc, const Entry& e) const {
     }
 }
 
-static std::atomic<size_t> g_grp_no_parent(0);
-static std::atomic<size_t> g_grp_no_entry(0), g_grp_vetoed(0);
-// Where nested HAPLOID chains ended up. Reported because it is how the population is gated: all
-// 44,139 "no strand" sites across chr20, chr6, chr17 and chrX were chrX's and none were autosomal,
-// so a bug confined to one of these buckets is invisible to any autosome-only check.
-static std::atomic<size_t> g_nest_strand(0), g_nest_one_hap(0);
-// The two ways a nested haploid chain under a DIPLOID parent ends up on no strand. Counted apart
-// because they are different facts with different right answers, and both are empty on every contig
-// measured -- so if either ever fires, which one it is decides what to do about it.
-static std::atomic<size_t> g_nest_both(0), g_nest_unreadable(0);
 
 /// Which of its parent's two strands a nested haploid chain sits on, or -1.
 ///
@@ -2029,16 +2013,16 @@ size_t LinkageCollector::resolve_generation(
             }
             auto par = index_of_key.find(e.parent_record_key);
             if (e.parent_record_key == 0) {
-                ++g_grp_no_parent;
+                ++model.counters.grp_no_parent;
             } else if (par == index_of_key.end()) {
-                ++g_grp_no_entry;
+                ++model.counters.grp_no_entry;
             } else {
                 by_parent[group_key(e)].push_back(idx);
                 continue;
             }
             // Decoded alone rather than dropped. What the veto was protecting is that a site left
             // out of every group is never decoded, never settled and never phased.
-            ++g_grp_vetoed;
+            ++model.counters.grp_vetoed;
             ungrouped.push_back(vector<size_t>{idx});
         }
         if (!by_parent.empty()) {
@@ -2091,10 +2075,10 @@ size_t LinkageCollector::resolve_generation(
                     return ea.record_key < ec.record_key;
                 });
                 if (pinned_phase.count(entries[pidx].record_key) != 0) {
-                    ++g_group_parent_pinned;
+                    ++model.counters.group_parent_pinned;
                 } else {
                     // No PhaseCall for the parent, so nothing ties this group's orientation to it.
-                    ++g_group_parent_unpinned;
+                    ++model.counters.group_parent_unpinned;
                 }
                 group.insert(group.end(), kv.second.begin(), kv.second.end());
                 grouped_sites += group.size();
@@ -2167,13 +2151,13 @@ size_t LinkageCollector::resolve_generation(
                             strand, strand >= 0 ? pin->second.order_arbitrary : false, have_hap};
                     }
                     if (strand >= 0) {
-                        g_nest_strand += kv.second.size();
+                        model.counters.nest_strand += kv.second.size();
                     } else if (have_hap) {
-                        g_nest_one_hap += kv.second.size();
+                        model.counters.nest_one_hap += kv.second.size();
                     } else if (carrying == -2) {
-                        g_nest_both += kv.second.size();
+                        model.counters.nest_both += kv.second.size();
                     } else {
-                        g_nest_unreadable += kv.second.size();
+                        model.counters.nest_unreadable += kv.second.size();
                     }
                 } else if (state_of(pin->second.first) >= m || state_of(pin->second.second) >= m) {
                     gctx.push_back(nullptr);
@@ -2507,26 +2491,26 @@ size_t LinkageCollector::resolve_generation(
         }
     }
 
-    if (generation > 0 && (g_pin_applied.load() + g_pin_declined.load()) > 0) {
+    if (generation > 0 && (model.counters.pin_applied.load() + model.counters.pin_declined.load()) > 0) {
 #pragma omp critical (cerr)
         std::cerr << "[vg call] linkage generation " << generation << ": pins -- "
-                  << g_pin_applied.load() << " applied, " << g_pin_declined.load()
+                  << model.counters.pin_applied.load() << " applied, " << model.counters.pin_declined.load()
                   << " REFUSED (the pinned pair cannot spell the constrained genotype, so that"
                   << " site's orientation is free); groups whose parent was pinnable: "
-                  << g_group_parent_pinned.load() << ", not pinnable: "
-                  << g_group_parent_unpinned.load() << std::endl;
+                  << model.counters.group_parent_pinned.load() << ", not pinnable: "
+                  << model.counters.group_parent_unpinned.load() << std::endl;
     }
 
     // Only when something actually declined. These have never fired on any contig measured, so
     // printing them every generation is a line that says "zero" forever and trains the reader to
     // skip it -- which is the opposite of what a counter kept as an alarm is for.
     if (generation > 0
-        && (g_grp_no_parent.load() + g_grp_no_entry.load() + g_grp_vetoed.load()) > 0) {
+        && (model.counters.grp_no_parent.load() + model.counters.grp_no_entry.load() + model.counters.grp_vetoed.load()) > 0) {
 #pragma omp critical (cerr)
         std::cerr << "[vg call] linkage generation " << generation << ": grouping declines so far -- "
-                  << g_grp_no_parent.load() << " sites with no parent key, "
-                  << g_grp_no_entry.load() << " whose parent has no live entry; "
-                  << g_grp_vetoed.load() << " chains kept ungrouped in total" << std::endl;
+                  << model.counters.grp_no_parent.load() << " sites with no parent key, "
+                  << model.counters.grp_no_entry.load() << " whose parent has no live entry; "
+                  << model.counters.grp_vetoed.load() << " chains kept ungrouped in total" << std::endl;
     }
 
     if (grouped_groups > 0) {
@@ -2537,14 +2521,14 @@ size_t LinkageCollector::resolve_generation(
     }
 
     if (generation > 0
-        && (g_nest_strand.load() + g_nest_one_hap.load() + g_nest_both.load()
-            + g_nest_unreadable.load()) > 0) {
+        && (model.counters.nest_strand.load() + model.counters.nest_one_hap.load() + model.counters.nest_both.load()
+            + model.counters.nest_unreadable.load()) > 0) {
 #pragma omp critical (cerr)
-        std::cerr << "[vg call] nested strands: " << g_nest_strand.load()
-                  << " on one of a diploid parent's two strands, " << g_nest_one_hap.load()
+        std::cerr << "[vg call] nested strands: " << model.counters.nest_strand.load()
+                  << " on one of a diploid parent's two strands, " << model.counters.nest_one_hap.load()
                   << " on a haploid parent's single haplotype (no strand to choose), "
-                  << g_nest_both.load() << " carried on both parent strands, "
-                  << g_nest_unreadable.load()
+                  << model.counters.nest_both.load() << " carried on both parent strands, "
+                  << model.counters.nest_unreadable.load()
                   << " whose parent's settled pair could not be read -- the last two name no"
                   << " haplotype" << std::endl;
     }

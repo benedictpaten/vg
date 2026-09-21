@@ -63,11 +63,6 @@ static bool apply_linkage_quality(string& line, double posterior, double explain
 ///
 /// Namespace-scope, so they are zero-initialised before any dynamic initialisation and no
 /// constructor has to know about them. Reported under --progress and otherwise inert.
-static std::atomic<size_t> g_descent_depth_hist[16];
-static std::atomic<size_t> g_descent_skipped_no_ref(0);
-static std::atomic<size_t> g_descent_off_reference(0);
-static std::atomic<size_t> g_no_ref_recorded(0);
-static std::atomic<size_t> g_no_ref_copies[3] = {{0}, {0}, {0}};
 /// Genotype and record chains the reference does not cross, instead of skipping them.
 ///
 /// Off by default. Their records cannot be emitted -- REF and POS are undefined -- so what this buys
@@ -76,66 +71,32 @@ static std::atomic<size_t> g_no_ref_copies[3] = {{0}, {0}, {0}};
 ///
 /// SELF-ENABLING under a gref cover, where those chains DO get a position: a gref fragment gives the
 /// inside of an insertion a contig of its own, which is precisely the REF and POS this was missing.
-/// `enable_off_reference_nesting()` is how `vg call` turns it on once it knows a gref path was
-/// selected. The env switch stays, because it is the only way to get the linkage-only arm on a graph
-/// with no cover, and that is what the two-arm comparisons are built on.
-static bool no_ref_nested = getenv("VG_CALL_NO_REF_NESTED") != nullptr;
-
-void enable_off_reference_nesting() {
-    no_ref_nested = true;
-}
-
-bool off_reference_nesting_enabled() {
-    return no_ref_nested;
-}
+/// `VCFOutputCaller::set_off_reference_nesting` is how `vg call` turns it on once it knows a gref
+/// path was selected. The VG_CALL_NO_REF_NESTED env switch stays, resolved once in `main_call`,
+/// because it is the only way to get the linkage-only arm on a graph with no cover, and that is
+/// what the two-arm comparisons are built on.
 // Mosaic segments naming a haplotype the graph does not carry across them, so there is no GBWT
 // position to walk from. Clipping is ordinary -- only 2 of chr20's 34 panel haplotypes are
 // contiguous -- so this is reported, not asserted to be zero.
-static std::atomic<size_t> g_mosaic_unwalkable(0);
 // Of those, the ones that are only a HEAD: the run resolved from a later site, so the walkable
 // remainder is emitted separately instead of being lost with the head.
-static std::atomic<size_t> g_mosaic_head_clipped(0);
 // Segment boundaries the run's own haplotype could be carried across, so the segment ends where
 // the next begins and the thread is contiguous there. And the ones it could not, which are what a
 // reference patch or a thread break has to cover.
-static std::atomic<size_t> g_mosaic_extended(0);
-static std::atomic<size_t> g_mosaic_gap_left(0);
-static std::atomic<size_t> g_mosaic_patched(0);
 // Rows whose own haplotype does not span them, rewritten as a reference substitution.
-static std::atomic<size_t> g_mosaic_row_to_ref(0);
 // Run boundaries between a parent and a child snarl, stated at the child's own boundary nodes.
-static std::atomic<size_t> g_mosaic_nested_enter(0);
-static std::atomic<size_t> g_mosaic_nested_leave(0);
 // Rows the carried direction could not walk but the other could -- an inversion boundary.
-static std::atomic<size_t> g_mosaic_direction_broken(0);
-static std::atomic<size_t> g_mosaic_extended_left(0);
-static std::atomic<size_t> g_descent_skipped_no_copy(0);
 /// Children a called traversal enters more than once. Visits after the first are masked: one copy for
 /// ploidy, and the first crossing for distance. A chain crossed twice by ONE traversal is one
 /// haplotype carrying two copies, not two haplotypes carrying one each, so it must not become ploidy
 /// 2 -- and representing the second copy at all is stage 17's question, deliberately deferred.
-static std::atomic<size_t> g_child_multi_crossing(0);
 
-// Measure, change nothing. Every counter here
-// answers a question the plan currently answers with an offline Python proxy over INFO/AT, and the
-// proxy cannot see what the caller sees -- notably that projection is inert for a flipped snarl.
-// Sites that reached tally_atomize at all, so the report can tell "nothing refused" from
-// "this never ran" -- the two look identical in a counter that only counts refusals.
-static std::atomic<size_t> g_atomize_sites(0);
-static std::atomic<size_t> g_atomize_site_unresolvable(0); // flip_snarl left projection with no symbols
-static std::atomic<size_t> g_atomize_site_reversed(0);     // resolved only via the reversed pairing
-// Stage 5: what the emitter actually did, as opposed to what stage 2 says it could do.
-static std::atomic<size_t> g_atomize_split_sites(0);
-static std::atomic<size_t> g_atomize_split_lines(0);
-// Stage 6: chains whose own record is suppressed because a block ALT already spells them.
-static std::atomic<size_t> g_atomize_child_inlined(0);
+// The block-emission counters measure, change nothing. Each answers a question the plan otherwise
+// answers with an offline Python proxy over INFO/AT, and the proxy cannot see what the caller sees
+// -- notably that projection is inert for a flipped snarl. They live on `AtomizeCounters`.
 
 
-// Why emit_block_records declined a site, by refusal point. Every one of these means "the site
-// record stands", so this is what "block emission did not fire here" actually consists of -- a
-// question the code could otherwise only be read for. On chr20 two reasons are 99.5% of it and six
-// of the ten never fire at all, which is worth knowing before anyone reworks the refusals.
-static std::atomic<size_t> g_atomize_refuse[10];
+// The names behind AtomizeCounters::refuse. Const, so file scope is right for it.
 static const char* const g_atomize_refuse_name[10] = {
     "the genotyper returned no genotype: ploidy 0, or no read the matrix could place",
     "no reference traversal",
@@ -153,43 +114,43 @@ static thread_local int g_descent_depth = 0;
 void GraphCaller::report_descent_instrumentation() const {
     size_t total = 0;
     for (int d = 0; d < 16; ++d) {
-        total += g_descent_depth_hist[d].load();
+        total += descent_counters.depth_hist[d].load();
     }
     if (total == 0) {
         return;   // no symbolic descent in this run
     }
     cerr << "[vg call] descent depth:";
     for (int d = 1; d < 16; ++d) {
-        size_t n = g_descent_depth_hist[d].load();
+        size_t n = descent_counters.depth_hist[d].load();
         if (n > 0) {
             cerr << " " << d << "=" << n;
         }
     }
     cerr << " (" << total << " child calls)" << endl;
-    if (g_child_multi_crossing.load() > 0) {
-        cerr << "[vg call] descent: " << g_child_multi_crossing.load()
+    if (descent_counters.child_multi_crossing.load() > 0) {
+        cerr << "[vg call] descent: " << descent_counters.child_multi_crossing.load()
              << " children a called traversal enters more than once; visits after the first are"
              << " masked, so each contributes one copy and its first crossing's distance" << endl;
     }
-    cerr << "[vg call] descent skipped: " << g_descent_skipped_no_copy.load()
-         << " children no called allele reaches, " << g_descent_skipped_no_ref.load()
+    cerr << "[vg call] descent skipped: " << descent_counters.skipped_no_copy.load()
+         << " children no called allele reaches, " << descent_counters.skipped_no_ref.load()
          << " with no reference path through them" << endl;
-    if (g_descent_off_reference.load() > 0 || g_no_ref_recorded.load() > 0) {
-        cerr << "[vg call] off-reference nested: " << g_descent_off_reference.load()
+    if (descent_counters.off_reference.load() > 0 || descent_counters.no_ref_recorded.load() > 0) {
+        cerr << "[vg call] off-reference nested: " << descent_counters.off_reference.load()
              << " chains the reference does not cross were descended into, "
-             << g_no_ref_recorded.load() << " recorded into the linkage layer with no line;"
-             << " copies 0/1/2 = " << g_no_ref_copies[0].load() << "/"
-             << g_no_ref_copies[1].load() << "/" << g_no_ref_copies[2].load() << endl;
+             << descent_counters.no_ref_recorded.load() << " recorded into the linkage layer with no line;"
+             << " copies 0/1/2 = " << descent_counters.no_ref_copies[0].load() << "/"
+             << descent_counters.no_ref_copies[1].load() << "/" << descent_counters.no_ref_copies[2].load() << endl;
     }
 }
 
-void report_atomize_instrumentation() {
-    size_t unresolvable = g_atomize_site_unresolvable.load();
+void VCFOutputCaller::report_atomize_instrumentation() const {
+    size_t unresolvable = atomize_counters.site_unresolvable.load();
     // Keyed on "did this run at all", not on any refusal counter. 18_vg_call.t reads the two
     // numbers on the line below and asserts one of them is ZERO on the forward control, so a
     // condition that goes quiet when nothing refused would make that assertion read an empty
     // string and pass vacuously.
-    if (g_atomize_sites.load() == 0) {
+    if (atomize_counters.sites.load() == 0) {
         return;
     }
 
@@ -202,12 +163,12 @@ void report_atomize_instrumentation() {
     // reversed branch ran, which is what makes its coverage a measurement rather than an assumption.
     cerr << "[vg call] atomize: " << unresolvable
          << " sites where projection is inert because the snarl does not resolve, "
-         << g_atomize_site_reversed.load()
+         << atomize_counters.site_reversed.load()
          << " resolved as the reversal flip_snarl produces" << endl;
 
 
-    if (g_atomize_child_inlined.load() > 0) {
-        cerr << "[vg call] atomize: " << g_atomize_child_inlined.load()
+    if (atomize_counters.child_inlined.load() > 0) {
+        cerr << "[vg call] atomize: " << atomize_counters.child_inlined.load()
              << " child chains not descended into because a block ALT already spells them" << endl;
     }
     {
@@ -215,14 +176,14 @@ void report_atomize_instrumentation() {
         // a refusal that suddenly has one is.
         size_t total = 0;
         for (size_t i = 0; i < 10; ++i) {
-            total += g_atomize_refuse[i].load();
+            total += atomize_counters.refuse[i].load();
         }
         if (total > 0) {
             cerr << "[vg call] atomize: " << total << " sites declined block emission, so the site"
                  << " record stands:";
             bool first = true;
             for (size_t i = 0; i < 10; ++i) {
-                size_t n = g_atomize_refuse[i].load();
+                size_t n = atomize_counters.refuse[i].load();
                 if (n > 0) {
                     cerr << (first ? " " : "; ") << n << " " << g_atomize_refuse_name[i];
                     first = false;
@@ -231,9 +192,9 @@ void report_atomize_instrumentation() {
             cerr << endl;
         }
     }
-    if (g_atomize_split_sites.load() > 0) {
-        cerr << "[vg call] atomize: " << g_atomize_split_sites.load()
-             << " sites emitted as blocks instead of one record, " << g_atomize_split_lines.load()
+    if (atomize_counters.split_sites.load() > 0) {
+        cerr << "[vg call] atomize: " << atomize_counters.split_sites.load()
+             << " sites emitted as blocks instead of one record, " << atomize_counters.split_lines.load()
              << " lines" << endl;
     }
 }
@@ -1937,7 +1898,7 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                     // is what left the child's run starting at the parent's end -- past all of its
                     // sites -- and two of those collapsed to a row spanning no graph at all.
                     to_node = next_start;
-                    ++g_mosaic_nested_enter;
+                    ++mosaic_counters.nested_enter;
                 } else if (leaving) {
                     // The row ends at the child's own snarl end, and the next row starts THERE, so
                     // the stretch from Ce to the parent's end is covered by the parent's haplotype
@@ -1951,10 +1912,10 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                     pending_from_pos = nh == LinkageModel::WILDCARD
                                            ? gbwt::invalid_edge()
                                            : mosaic_gbwt_position(b.end_node, nh);
-                    ++g_mosaic_nested_leave;
+                    ++mosaic_counters.nested_leave;
                 } else if (right) {
                     to_node = next_start;
-                    ++g_mosaic_extended;
+                    ++mosaic_counters.extended;
                 } else {
                     // EXTEND LEFT: the same operation from the other end. This segment's haplotype
                     // cannot be carried forward, so try carrying the NEXT segment's haplotype back
@@ -1974,7 +1935,7 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                             && (mine == gbwt::invalid_edge() || mine.first == here.first)) {
                             pending_from_node = b.end_node;
                             pending_from_pos = here;
-                            ++g_mosaic_extended_left;
+                            ++mosaic_counters.extended_left;
                             closed = true;
                         }
                     }
@@ -1997,11 +1958,11 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                                 patch_pos = rl;
                                 patch_from_pos = b.position;
                                 patch_to_pos = site(b_idx + 1).position;
-                                ++g_mosaic_patched;
+                                ++mosaic_counters.patched;
                             }
                         }
                         if (patch_to < 0) {
-                            ++g_mosaic_gap_left;
+                            ++mosaic_counters.gap_left;
                             boundary_open = true;
                         }
                     }
@@ -2064,7 +2025,7 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                     && start_and_walk(reference_hap, &row_pos, &row_end)) {
                     as_ref = true;
                     walkable = true;
-                    ++g_mosaic_row_to_ref;
+                    ++mosaic_counters.row_to_ref;
                 }
             }
             // LAST RESORT: try the row WITHOUT the carry's direction. The carry is authoritative
@@ -2082,7 +2043,7 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                 walkable = true;
                 direction_broken = carry_applies && row_pos.first != carry;
                 if (direction_broken) {
-                    ++g_mosaic_direction_broken;
+                    ++mosaic_counters.direction_broken;
                 }
             }
             // And the REFERENCE without the carry either, which is the same last resort applied to
@@ -2102,10 +2063,10 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                 && start_and_walk(reference_hap, &row_pos, &row_end, true)) {
                 as_ref = true;
                 walkable = true;
-                ++g_mosaic_row_to_ref;
+                ++mosaic_counters.row_to_ref;
                 direction_broken = carry_applies && row_pos.first != carry;
                 if (direction_broken) {
-                    ++g_mosaic_direction_broken;
+                    ++mosaic_counters.direction_broken;
                 }
             }
             if (!walkable) {
@@ -2199,8 +2160,8 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
                     ++total_segments;
                     carry = pe;
                 } else {
-                    ++g_mosaic_gap_left;
-                    --g_mosaic_patched;
+                    ++mosaic_counters.gap_left;
+                    --mosaic_counters.patched;
                     carry = gbwt::ENDMARKER;
                     ++fragment;
                 }
@@ -2248,21 +2209,21 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
             }
             if (first_ok > to) {
                 emit_row(from, to, pos);        // clipped across the whole run
-                ++g_mosaic_unwalkable;
+                ++mosaic_counters.unwalkable;
                 return;
             }
             // The unresolvable head, as small as it really is, then the walkable remainder.
             if (first_ok > from) {
                 emit_row(from, first_ok - 1, gbwt::invalid_edge());
-                ++g_mosaic_unwalkable;
-                ++g_mosaic_head_clipped;
+                ++mosaic_counters.unwalkable;
+                ++mosaic_counters.head_clipped;
             }
             emit_span(first_ok, to, strand, hap, kind);
             return;
         }
         if (pos == gbwt::invalid_edge() || from == to) {
             if (pos == gbwt::invalid_edge() && hap != LinkageModel::WILDCARD) {
-                ++g_mosaic_unwalkable;
+                ++mosaic_counters.unwalkable;
             }
             emit_row(from, to, pos);
             return;
@@ -2383,20 +2344,20 @@ void VCFOutputCaller::write_mosaic(const vector<LinkageCollector::PhaseCall>& ph
     // A named haplotype the graph does not carry across the segment, so there is no position to walk
     // from. Ordinary rather than alarming -- only 2 of chr20's 34 panel haplotypes are contiguous --
     // but it is what a consumer has to patch or break at, so it is a number and not a silence.
-    cerr << "[vg call] mosaic: " << g_mosaic_extended.load()
-         << " segment boundaries closed by extending right, " << g_mosaic_extended_left.load()
-         << " by extending left instead, " << g_mosaic_patched.load()
+    cerr << "[vg call] mosaic: " << mosaic_counters.extended.load()
+         << " segment boundaries closed by extending right, " << mosaic_counters.extended_left.load()
+         << " by extending left instead, " << mosaic_counters.patched.load()
          << " filled with the reference because neither haplotype could be carried across, "
-         << g_mosaic_gap_left.load() << " left as a gap" << endl;
-    cerr << "[vg call] mosaic: " << g_mosaic_nested_enter.load()
-         << " boundaries where the walk enters a child snarl, " << g_mosaic_nested_leave.load()
+         << mosaic_counters.gap_left.load() << " left as a gap" << endl;
+    cerr << "[vg call] mosaic: " << mosaic_counters.nested_enter.load()
+         << " boundaries where the walk enters a child snarl, " << mosaic_counters.nested_leave.load()
          << " where it leaves one -- both stated at the CHILD's boundary node" << endl;
-    cerr << "[vg call] mosaic: " << g_mosaic_direction_broken.load()
+    cerr << "[vg call] mosaic: " << mosaic_counters.direction_broken.load()
          << " rows walked against the carried direction, each standing alone (inversions)" << endl;
-    cerr << "[vg call] mosaic: " << g_mosaic_unwalkable.load()
+    cerr << "[vg call] mosaic: " << mosaic_counters.unwalkable.load()
          << " segments name a haplotype the graph does not carry across them, of which "
-         << g_mosaic_head_clipped.load() << " are a clipped head whose remainder is walkable; "
-         << g_mosaic_row_to_ref.load() << " rewritten as a reference substitution" << endl;
+         << mosaic_counters.head_clipped.load() << " are a clipped head whose remainder is walkable; "
+         << mosaic_counters.row_to_ref.load() << " rewritten as a reference substitution" << endl;
 }
 
 /// Rewrite one rendered record's quality from the linkage posterior. A free function rather than a
@@ -3290,7 +3251,7 @@ bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
 
     // Every crossing by every called haplotype falls inside a difference block, so the block's ALT
     // already spells the route through it. Reporting it again would be the same variation twice.
-    ++g_atomize_child_inlined;
+    ++atomize_counters.child_inlined;
     return true;
 }
 
@@ -3314,16 +3275,17 @@ bool VCFOutputCaller::is_symbolically_reference(const vector<SnarlTraversal>& ca
 /// nothing it can alter, so a run with this compiled in is byte-identical to one without.
 static void tally_atomize(const PathPositionHandleGraph& graph, const SnarlManager* mgr,
                           const Snarl& snarl, const vector<SnarlTraversal>& travs,
-                          const vector<int>& genotype, int ref_trav_idx) {
+                          const vector<int>& genotype, int ref_trav_idx,
+                          AtomizeCounters& atomize_counters) {
     if (mgr == nullptr || ref_trav_idx < 0 || (size_t)ref_trav_idx >= travs.size()) {
         return;
     }
-    ++g_atomize_sites;
+    ++atomize_counters.sites;
     bool site_reversed = false;
     if (!symbolic_site_resolvable(snarl, *mgr, &site_reversed)) {
         // Projection would report a bare node list here, so a block count from it would measure
         // node-level shredding rather than chain structure. Counted and skipped, not folded in.
-        ++g_atomize_site_unresolvable;
+        ++atomize_counters.site_unresolvable;
         return;
     }
     if (site_reversed) {
@@ -3331,7 +3293,7 @@ static void tally_atomize(const PathPositionHandleGraph& graph, const SnarlManag
         // that read 9,279 before the reversed pairing was accepted. Counting inside the resolver
         // instead would count calls: projection runs per traversal, so a single site would bump it
         // once per allele per haplotype and the number would look like an over-fire.
-        ++g_atomize_site_reversed;
+        ++atomize_counters.site_reversed;
     }
 
 }
@@ -3366,17 +3328,17 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         return -1;
     }
     if (genotype.empty()) {
-        ++g_atomize_refuse[0];
+        ++atomize_counters.refuse[0];
         return -1;
     }
     if (ref_trav_idx < 0 || (size_t)ref_trav_idx >= called_traversals.size()) {
-        ++g_atomize_refuse[1];
+        ++atomize_counters.refuse[1];
         return -1;
     }
     if (!symbolic_site_resolvable(snarl, *symbolic_manager)) {
         // Projection would see no child chains here, so a diff over it measures node-level
         // shredding rather than route structure. Counted in the stage-2 instrumentation.
-        ++g_atomize_refuse[2];
+        ++atomize_counters.refuse[2];
         return -1;
     }
 
@@ -3385,7 +3347,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
     SymbolicAllele sref = symbolic_allele(ref_trav, snarl, *symbolic_manager, &ref_ranges);
     const size_t m = sref.size();
     if (m == 0 || ref_ranges.size() != m) {
-        ++g_atomize_refuse[3];
+        ++atomize_counters.refuse[3];
         return -1;
     }
 
@@ -3443,7 +3405,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         bool degraded = false;
         haps[s].blocks = symbolic_diff(sref, haps[s].sym, &degraded, &haps[s].alt_before_ref);
         if (degraded || haps[s].alt_before_ref.size() != m + 1) {
-            ++g_atomize_refuse[4];
+            ++atomize_counters.refuse[4];
             return -1;
         }
     }
@@ -3459,7 +3421,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         }
     }
     if (ivs.empty()) {
-        ++g_atomize_refuse[5];
+        ++atomize_counters.refuse[5];
         return -1;
     }
     sort(ivs.begin(), ivs.end());
@@ -3530,7 +3492,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         int64_t pos = site_position + (int64_t)ref_visit_off[vb];
         if (needs_anchor) {
             if (vb <= 0) {
-                ++g_atomize_refuse[6];
+                ++atomize_counters.refuse[6];
                 // Not only "POS would fall outside the snarl": the next line would call
                 // seq_of(ref_trav, -1, 0), whose loop has no lower bound and would read
                 // ref_trav.visit(-1). Reachable when the snarl's own start node appears twice in
@@ -3541,7 +3503,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
             }
             string left = seq_of(ref_trav, vb - 1, vb);
             if (left.empty()) {
-                ++g_atomize_refuse[7];
+                ++atomize_counters.refuse[7];
                 return -1;
             }
             string base(1, left.back());
@@ -3797,7 +3759,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
     }
 
     if (built.empty()) {
-        ++g_atomize_refuse[8];
+        ++atomize_counters.refuse[8];
         return -1;
     }
     // Only take over from the site record where doing so changes the answer: more than one record,
@@ -3806,7 +3768,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
     // falls through so its bytes are unchanged.
     bool collapses = built.size() == 1 && built[0].alleles.size() < site.alleles.size();
     if (built.size() < 2 && !collapses) {
-        ++g_atomize_refuse[9];
+        ++atomize_counters.refuse[9];
         return -1;
     }
 
@@ -3904,7 +3866,8 @@ bool VCFOutputCaller::emit_variant(const PathPositionHandleGraph& graph, SnarlCa
         }
     }
 
-    tally_atomize(graph, symbolic_manager, snarl, called_traversals, genotype, ref_trav_idx);
+    tally_atomize(graph, symbolic_manager, snarl, called_traversals, genotype, ref_trav_idx,
+                  atomize_counters);
 
     // add on fixed number of uncalled traversals if we're making a ref-call
     // with genotype_snarls set to true
@@ -4142,8 +4105,8 @@ bool VCFOutputCaller::emit_variant(const PathPositionHandleGraph& graph, SnarlCa
                                                trav_to_allele, site_position_unflattened,
                                                gl_layout, genotype_snarls);
     if (block_lines >= 0) {
-        ++g_atomize_split_sites;
-        g_atomize_split_lines += (size_t)block_lines;
+        ++atomize_counters.split_sites;
+        atomize_counters.split_lines += (size_t)block_lines;
         // last_emitted above still describes this snarl's traversals, which is what descent reads;
         // the buffer handle is deliberately left unset, because there is no single line to retract.
         return block_lines > 0;
@@ -5832,7 +5795,7 @@ int FlowCaller::child_ploidy(const vector<SnarlTraversal>& travs, const vector<i
         // size of the deferred copy-number question -- so it needs a number reported once a run, not
         // a line per site gated on --progress that has to be grepped out of 24 logs. Measured that
         // way: 0 on chr20, 242 on chrX.
-        ++g_child_multi_crossing;
+        ++descent_counters.child_multi_crossing;
     }
     return min(copies, cap);
 }
@@ -7954,13 +7917,13 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                         ref_offset_of(ref_offsets, ref_path_name), /*no_reference*/ true,
                         // The parent's interval, which `use_parent_interval` put here.
                         get<0>(ref_interval) + ref_offset_of(ref_offsets, ref_path_name));
-            ++g_no_ref_recorded;
+            ++descent_counters.no_ref_recorded;
             {
                 int copies = 0;
                 for (int a : trav_genotype) {
                     copies += (a >= 0);
                 }
-                g_no_ref_copies[copies < 3 ? copies : 2].fetch_add(1);
+                descent_counters.no_ref_copies[copies < 3 ? copies : 2].fetch_add(1);
             }
             added = true;
         } else if (retain_only) {
@@ -8113,12 +8076,12 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                         // VG_CALL_NO_REF_NESTED admits these instead of skipping them: genotyped and
                         // recorded into the linkage layer, but never emitted, because REF and POS for
                         // such a chain are undefined. One binary, two arms.
-                        if (!no_ref_nested) {
-                            ++g_descent_skipped_no_ref;
+                        if (!off_reference_nesting) {
+                            ++descent_counters.skipped_no_ref;
                             continue;
                         }
                         child_off_reference = true;
-                        ++g_descent_off_reference;
+                        ++descent_counters.off_reference;
                     }
                 }
                 // Inherited: everything under a chain the reference does not cross is also off it.
@@ -8154,7 +8117,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                     // linkage may move it onto an allele that does reach this chain -- 296 of them on
                     // chr20. Going back to the reads at the barrier to find out is what cost five
                     // sweeps of the contig. Nothing about it is emitted unless the barrier says so.
-                    ++g_descent_skipped_no_copy;
+                    ++descent_counters.skipped_no_copy;
                     if (!defer_nested_descent) {
                         continue;   // without retention there is nothing to come back to
                     }
@@ -8208,7 +8171,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                 current_generation = saved_generation + 1;
                 ++g_descent_depth;
                 if (g_descent_depth < 16) {
-                    ++g_descent_depth_hist[g_descent_depth];
+                    ++descent_counters.depth_hist[g_descent_depth];
                 }
                 // Falls back to the PARENT's ploidy, not to a literal 2. `copies` is zero here
                 // only for a chain no called parent allele reaches -- a retained chain, genotyped
