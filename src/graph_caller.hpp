@@ -1453,6 +1453,11 @@ public:
     virtual string vcf_header(const PathHandleGraph& graph, const vector<string>& contigs,
                               const vector<size_t>& contig_length_overrides = {}) const;
 
+    /// See max_snarl_edges. Zero lifts the cap entirely.
+    void set_max_snarl_edges(size_t edges) {
+        max_snarl_edges = edges ? edges : numeric_limits<size_t>::max();
+    }
+
 protected:
 
     /// the graph
@@ -1471,7 +1476,10 @@ protected:
     /// keep traco of the ploidies (todo: just one map for all path stuff!!)
     map<string, int> ref_ploidies;
 
-    /// until we support nested snarls, cap snarl size we attempt to process
+    /// Refuse to genotype a snarl with more deep edges than this, leaving RecurseOnFail to
+    /// genotype its children instead. Settable so the refusal can be measured rather than
+    /// assumed: on HG002 chr20 it declines 14 loci on the 34-haplotype short-read graph and 7
+    /// on the 16-haplotype ONT one, and lifting it costs about 49 s on the short-read arm.
     size_t max_snarl_edges = 10000;
 
     /// alignment emitter. if not null, traversals will be output here and

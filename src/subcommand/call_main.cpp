@@ -421,6 +421,9 @@ void help_call(char** argv) {
          << "  -a, --genotype-snarls     genotype every snarl, including reference calls" << endl
          << "                            (use to compare multiple samples)" << endl
          << "  -A, --all-snarls          call all snarls including nested (each independent)" << endl
+         << "      --max-snarl-edges N   refuse to genotype a snarl with more deep edges than" << endl
+         << "                            this, calling its children instead; 0 lifts the cap" << endl
+         << "                            [10000]" << endl
          << "  -c, --min-length N        genotype only snarls with" << endl
          << "                            at least one traversal of length >= N" << endl
          << "  -C, --max-length N        genotype only snarls where" << endl 
@@ -704,6 +707,7 @@ int main_call(int argc, char** argv) {
     const size_t max_depth_bin_width = 50000000;
     const double depth_scale_fac = 1.5;
     const size_t max_yens_traversals = traversals_only ? 100 : 50;
+    size_t max_snarl_edges_opt = 10000;   // FlowCaller's own default; --max-snarl-edges overrides
     // used to merge up snarls from chains when generating traversals
     const size_t max_chain_edges = 1000; 
     const size_t max_chain_trivial_travs = 5;
@@ -739,6 +743,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_NO_REALIGN = 1093;
     constexpr int OPT_NO_SHARE_QUALITY = 1021;
     constexpr int OPT_FLAT_MIXTURE = 1023;
+    constexpr int OPT_MAX_SNARL_EDGES = 1109;
     constexpr int OPT_DEPTH_TERM = 1025;
     constexpr int OPT_DEPTH_COUNT_RAW = 1026;
     constexpr int OPT_DEPTH_QUALITY = 1027;
@@ -877,6 +882,7 @@ int main_call(int argc, char** argv) {
         {"no-realign", no_argument, 0, OPT_NO_REALIGN,                      OWN_READ_LIKELIHOOD},
         {"no-share-quality", no_argument, 0, OPT_NO_SHARE_QUALITY,          OWN_READ_LIKELIHOOD},
         {"flat-mixture", no_argument, 0, OPT_FLAT_MIXTURE,                  OWN_READ_LIKELIHOOD},
+        {"max-snarl-edges", required_argument, 0, OPT_MAX_SNARL_EDGES,      OWN_CORE},
         {"depth-term", required_argument, 0, OPT_DEPTH_TERM,                OWN_READ_LIKELIHOOD},
         {"depth-count-raw", no_argument, 0, OPT_DEPTH_COUNT_RAW,            OWN_READ_LIKELIHOOD},
         {"depth-quality", required_argument, 0, OPT_DEPTH_QUALITY,          OWN_READ_LIKELIHOOD},
@@ -1159,6 +1165,9 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_FLAT_MIXTURE:
             flat_mixture = true;
+            break;
+        case OPT_MAX_SNARL_EDGES:
+            max_snarl_edges_opt = parse<size_t>(optarg);
             break;
         case OPT_DEPTH_TERM:
             depth_weight = parse<double>(optarg);
@@ -2715,6 +2724,13 @@ int main_call(int argc, char** argv) {
     // again below this point, so the cast is done once. Null means a caller that emits no VCF,
     // which several of the options below treat as "the default declines" rather than as an error --
     // so the per-option null handling stays exactly where it is.
+    // Applied here rather than through a constructor argument: three of the branches above build
+    // a FlowCaller and none of them takes the cap, so one cast after the fact keeps the option in
+    // one place. A caller that is not a FlowCaller has no such cap to set.
+    if (FlowCaller* flow_caller = dynamic_cast<FlowCaller*>(graph_caller.get())) {
+        flow_caller->set_max_snarl_edges(max_snarl_edges_opt);
+    }
+
     VCFOutputCaller* const vcf_out = dynamic_cast<VCFOutputCaller*>(graph_caller.get());
 
     // Per-region ploidy, if given. Applied to whichever caller was built: every one of them
