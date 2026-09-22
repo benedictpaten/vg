@@ -710,7 +710,10 @@ int main_call(int argc, char** argv) {
     const size_t min_depth_bin_width = 50;
     const size_t max_depth_bin_width = 50000000;
     const double depth_scale_fac = 1.5;
-    const size_t max_yens_traversals = traversals_only ? 100 : 50;
+    // Resolved after parsing, below. Declared here with the other scorer constants, but reading
+    // `traversals_only` at this point gave 50 unconditionally -- the flag is set by getopt, which
+    // has not run yet -- so the 100 arm was unreachable from the day it was written.
+    size_t max_yens_traversals = 50;
     // Default resolved after parsing, because it differs by caller: see below.
     size_t max_snarl_edges_opt = 0;
     bool max_snarl_edges_explicit = false;
@@ -1474,6 +1477,11 @@ int main_call(int argc, char** argv) {
     if (trav_padding > 0 && traversals_only == false) {
         logger.error() << "-M option can only be used in conjunction with -T" << endl;
     }
+
+    // Now that `traversals_only` has actually been parsed. Emitting traversals rather than
+    // genotyping them is a different job -- nothing downstream has to score what comes out -- so
+    // it enumerates more of them. This is the first build in which that is true.
+    max_yens_traversals = traversals_only ? 100 : 50;
 
     // Block emission is on by default, so these checks must DECLINE rather than refuse when the
     // setting is implicit -- refusing would break `vg call -a` and `--legacy` for everyone, on a
@@ -3384,6 +3392,10 @@ int main_call(int argc, char** argv) {
                 // is the number to watch if a run is slow.
                 logger.info() << "GAF-Base: " << gaf_base->get_query_count()
                               << " subprocess queries" << endl;
+                // The same alignment returned twice by one query. It reaches the likelihood
+                // matrix as two rows for one read otherwise, which per-read independence forbids.
+                logger.info() << "GAF-Base: " << gaf_base->get_duplicate_count()
+                              << " duplicate reads dropped" << endl;
             }
         }
     }

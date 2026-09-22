@@ -510,6 +510,22 @@ const string& GafBaseSiteReadSource::gaf_path(ThreadState& state, size_t slot) c
     return state.gaf_paths[slot];
 }
 
+size_t GafBaseSiteReadSource::argv_node_budget() {
+    static const size_t budget = [](){
+        long arg_max = sysconf(_SC_ARG_MAX);
+        if (arg_max <= 0) {
+            arg_max = 262144;   // conservative: POSIX only guarantees 4096
+        }
+        // "-n" and the id, each NUL-terminated. Node ids here run to ten digits.
+        const size_t per_node = 3 + 11;
+        const size_t from_limit = (size_t)arg_max / 4 / per_node;
+        // Never below the value this replaced, so no configuration gets a smaller batch than
+        // before, and never so large that one child holds an implausible span.
+        return min<size_t>(max<size_t>(4096, from_limit), 65536);
+    }();
+    return budget;
+}
+
 GafBaseSiteReadSource::PendingQuery GafBaseSiteReadSource::spawn_query(
     ThreadState& state, size_t slot, const vector<nid_t>& nodes) const {
 
@@ -652,8 +668,35 @@ void GafBaseSiteReadSource::fetch_span(const vector<pair<nid_t, nid_t>>& ranges,
 
     ThreadState& state = thread_state();
 
+    // One de-duplication rule, whichever way the query goes. It used to apply only when a query
+    // was SPLIT, so whether a read survived depended on how many nodes its site happened to span
+    // rather than on anything about the read -- and widening the batch moved sites across that
+    // line, which is how the asymmetry came to light. An unsplit query returns 32 duplicates over
+    // chr20's 14.9 M fetched reads: rare, but not zero, and each one was a second row for the same
+    // alignment in the likelihood matrix, which the model's per-read independence does not allow.
+    //
+    // Keyed on name AND start position, not name alone. Paired reads share a name -- in real
+    // Illumina GAF both mates carry the same identifier -- so keying on the name would silently
+    // discard one mate of every pair, halving the evidence at those sites.
+    auto deduped = [&](const function<void(Alignment&)>& emit) {
+        auto seen = make_shared<unordered_set<string>>();
+        return [&emit, seen, this](Alignment& aln) {
+            string key = aln.name();
+            if (aln.path().mapping_size() > 0) {
+                const Position& pos = aln.path().mapping(0).position();
+                key += "\t" + to_string(pos.node_id()) + "\t" + to_string(pos.offset()) +
+                       (pos.is_reverse() ? "-" : "+");
+            }
+            if (seen->insert(std::move(key)).second) {
+                emit(aln);
+            } else {
+                ++duplicates_dropped;
+            }
+        };
+    };
+
     if (nodes.size() <= max_query_nodes) {
-        run_query_or_die(state, nodes, iteratee);
+        run_query_or_die(state, nodes, deduped(iteratee));
         return;
     }
 
@@ -681,19 +724,11 @@ void GafBaseSiteReadSource::fetch_span(const vector<pair<nid_t, nid_t>>& ranges,
             pending.push_back(spawn_query(state, slot, chunk));
         }
 
-        unordered_set<string> seen;
+        // Chunks overlap in reads rather than in nodes -- a read spanning a chunk boundary comes
+        // back from both -- so one shared filter spans every chunk of this query.
+        auto emit = deduped(iteratee);
         for (PendingQuery& query : pending) {
-            reap_query(query, [&](Alignment& aln) {
-                string key = aln.name();
-                if (aln.path().mapping_size() > 0) {
-                    const Position& pos = aln.path().mapping(0).position();
-                    key += "\t" + to_string(pos.node_id()) + "\t" + to_string(pos.offset()) +
-                           (pos.is_reverse() ? "-" : "+");
-                }
-                if (seen.insert(std::move(key)).second) {
-                    iteratee(aln);
-                }
-            });
+            reap_query(query, emit);
         }
     } catch (const std::exception& e) {
         // Calling happens inside an OpenMP parallel region, where an exception must not

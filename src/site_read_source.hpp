@@ -507,10 +507,26 @@ private:
 
     /// Node IDs per subprocess. A node list becomes argv, so it cannot grow without
     /// bound; queries larger than this are split, and their results de-duplicated.
-    size_t max_query_nodes = 4096;
+    /// The argv budget in node IDs, from sysconf(_SC_ARG_MAX). Static so it is computed once.
+    static size_t argv_node_budget();
+
+    /// Node IDs per child process. The bound is the child's argv limit -- each node costs
+    /// "-n" plus its digits -- so it is derived from ARG_MAX rather than guessed, and uses a
+    /// quarter of it so the environment and the fixed arguments have room. A fixed 4096 meant a
+    /// wide fetch spawned one child per 4096 nodes: chr20's largest snarl, 415k nodes, cost about
+    /// a hundred spawns to answer one site, and a spawn is ~0.44 s of system time.
+    size_t max_query_nodes = argv_node_budget();
 
     mutable vector<ThreadState> threads;
     mutable atomic<size_t> queries{0};
+    /// Reads returned more than once by one query, split or not, and dropped.
+    mutable atomic<size_t> duplicates_dropped{0};
+
+public:
+    /// See duplicates_dropped.
+    size_t get_duplicate_count() const { return duplicates_dropped.load(); }
+
+private:
 };
 
 }
