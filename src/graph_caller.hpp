@@ -19,6 +19,7 @@
 #include "read_phasing.hpp"
 #include "regenotype.hpp"
 #include "snarl_caller.hpp"
+#include "symbolic_allele.hpp"
 #include "region.hpp"
 #include "zstdutil.hpp"
 #include "vg/io/alignment_emitter.hpp"
@@ -539,6 +540,37 @@ protected:
     bool chain_reported_inline(const Snarl& snarl, const vector<SnarlTraversal>& travs,
                                const vector<int>& genotype, int ref_trav_idx,
                                const Snarl& child) const;
+
+    /// Everything the rule derives that does NOT depend on the child: the site's symbolic
+    /// projection, each called ALT's projection, and the reference-to-ALT difference blocks.
+    ///
+    /// The caller asks the rule once per child, with the same snarl, traversals and genotype every
+    /// time, so rebuilding this per child costs
+    /// O(children x alleles x |projection|^2) -- the edit-distance DP in `symbolic_diff` dominates
+    /// and is identical on every child. Built once before the loop it is computed once.
+    struct ChainInlineContext {
+        /// False when the rule can answer `false` outright: indices out of range, an empty
+        /// genotype, an unresolvable site, the reference among the called alleles, or a degraded
+        /// difference. Each of those returns false from every path today, so collapsing them into
+        /// one flag is behaviour-preserving.
+        bool usable = false;
+        SymbolicAllele sref;
+        struct Alt {
+            SymbolicAllele salt;
+            vector<DiffBlock> blocks;
+        };
+        /// One entry per called allele that is in range and not the reference, in genotype order.
+        vector<Alt> alts;
+    };
+
+    /// Build the child-independent half of the rule. See ChainInlineContext.
+    ChainInlineContext build_chain_inline_context(const Snarl& snarl,
+                                                  const vector<SnarlTraversal>& travs,
+                                                  const vector<int>& genotype,
+                                                  int ref_trav_idx) const;
+
+    /// The child-dependent half. Identical in result to the five-argument form.
+    bool chain_reported_inline(const ChainInlineContext& ctx, const Snarl& child) const;
 
     /// True when this called traversal takes the same route through the snarl as the reference and
     /// differs only inside child chains. False whenever symbolic collapsing is off, so the

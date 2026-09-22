@@ -3160,25 +3160,58 @@ thread_local VCFOutputCaller::NestedContext VCFOutputCaller::nested_context;
 thread_local size_t VCFOutputCaller::current_generation = 0;
 thread_local bool VCFOutputCaller::last_emit_valid = false;
 
-bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
-                                            const vector<SnarlTraversal>& travs,
-                                            const vector<int>& genotype, int ref_trav_idx,
-                                            const Snarl& child) const {
+VCFOutputCaller::ChainInlineContext VCFOutputCaller::build_chain_inline_context(
+    const Snarl& snarl, const vector<SnarlTraversal>& travs,
+    const vector<int>& genotype, int ref_trav_idx) const {
+    ChainInlineContext ctx;
     // Inert unless block emission is on. With one record per snarl the parent's ALT spans the whole
     // snarl anyway, so there is no sense in which a chain is "inside a block".
     if (!atomize_blocks || symbolic_manager == nullptr) {
-        return false;
+        return ctx;
     }
     if (ref_trav_idx < 0 || (size_t)ref_trav_idx >= travs.size() || genotype.empty()) {
-        return false;
+        return ctx;
     }
     // A snarl whose projection has no symbols at all cannot answer this question: every child would
     // read as "not matched" and the whole subtree would be dropped rather than delegated. That is
     // the flipped-snarl case, and getting it wrong turns double reporting into non-reporting.
     if (!symbolic_site_resolvable(snarl, *symbolic_manager)) {
-        return false;
+        return ctx;
+    }
+    // A genotype carrying the reference matches every reference step, the chain among them, so the
+    // rule answers false whatever the child is. The five-argument form returned false from inside
+    // the allele loop; hoisting the test changes nothing, because every other exit from that loop
+    // also returns false.
+    for (int allele : genotype) {
+        if (allele == ref_trav_idx) {
+            return ctx;
+        }
     }
 
+    ctx.sref = symbolic_allele(travs[ref_trav_idx], snarl, *symbolic_manager);
+
+    for (int allele : genotype) {
+        if (allele < 0 || (size_t)allele >= travs.size()) {
+            continue;
+        }
+        ChainInlineContext::Alt alt;
+        alt.salt = symbolic_allele(travs[allele], snarl, *symbolic_manager);
+        bool degraded = false;
+        alt.blocks = symbolic_diff(ctx.sref, alt.salt, &degraded);
+        if (degraded) {
+            return ctx;   // no reliable block structure, so no reliable conclusion
+        }
+        ctx.alts.push_back(std::move(alt));
+    }
+    ctx.usable = true;
+    return ctx;
+}
+
+bool VCFOutputCaller::chain_reported_inline(const ChainInlineContext& ctx,
+                                            const Snarl& child) const {
+    if (!ctx.usable) {
+        return false;
+    }
     const Snarl* managed_child = symbolic_manager->into_which_snarl(child.start().node_id(),
                                                                    child.start().backward());
     if (managed_child == nullptr) {
@@ -3186,35 +3219,22 @@ bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
     }
     pair<nid_t, nid_t> bounds = chain_bounds_of(managed_child, *symbolic_manager);
 
-    SymbolicAllele sref = symbolic_allele(travs[ref_trav_idx], snarl, *symbolic_manager);
     // Where the chain sits in the reference projection. If it is nowhere, the reference does not
     // cross it and the caller's own reference gate has already dealt with that.
-    vector<size_t> chain_steps;
-    for (size_t i = 0; i < sref.size(); ++i) {
-        if (sref[i].is_chain() && sref[i].id == bounds.first && sref[i].end_id == bounds.second) {
-            chain_steps.push_back(i);
+    bool in_reference = false;
+    for (size_t i = 0; i < ctx.sref.size(); ++i) {
+        if (ctx.sref[i].is_chain() && ctx.sref[i].id == bounds.first &&
+            ctx.sref[i].end_id == bounds.second) {
+            in_reference = true;
+            break;
         }
     }
-    if (chain_steps.empty()) {
+    if (!in_reference) {
         return false;
     }
 
     bool any_crossing = false;
-    for (int allele : genotype) {
-        if (allele < 0 || (size_t)allele >= travs.size()) {
-            continue;
-        }
-        if (allele == ref_trav_idx) {
-            // This haplotype IS the reference here, so every reference step matches, the chain
-            // among them. Delegated, and nothing further to check.
-            return false;
-        }
-        SymbolicAllele salt = symbolic_allele(travs[allele], snarl, *symbolic_manager);
-        bool degraded = false;
-        vector<DiffBlock> blocks = symbolic_diff(sref, salt, &degraded);
-        if (degraded) {
-            return false;   // no reliable block structure, so no reliable conclusion
-        }
+    for (const ChainInlineContext::Alt& alt : ctx.alts) {
         // This haplotype's OWN crossings, found in its own projection.
         //
         // Testing the reference's chain step instead is wrong, and wrong in a way that fires 60x
@@ -3223,14 +3243,14 @@ bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
         // contributes no copy at all. Those chains are exactly the ones the caller retains for
         // possible revision when no called allele reaches them yet, and suppressing them here
         // deleted 399 records that linkage was still entitled to move.
-        for (size_t j = 0; j < salt.size(); ++j) {
-            if (!salt[j].is_chain() || salt[j].id != bounds.first ||
-                salt[j].end_id != bounds.second) {
+        for (size_t j = 0; j < alt.salt.size(); ++j) {
+            if (!alt.salt[j].is_chain() || alt.salt[j].id != bounds.first ||
+                alt.salt[j].end_id != bounds.second) {
                 continue;
             }
             any_crossing = true;
             bool inside = false;
-            for (const DiffBlock& b : blocks) {
+            for (const DiffBlock& b : alt.blocks) {
                 if ((size_t)b.alt_begin <= j && j < (size_t)b.alt_end) {
                     inside = true;
                     break;
@@ -3253,6 +3273,14 @@ bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
     // already spells the route through it. Reporting it again would be the same variation twice.
     ++atomize_counters.child_inlined;
     return true;
+}
+
+bool VCFOutputCaller::chain_reported_inline(const Snarl& snarl,
+                                            const vector<SnarlTraversal>& travs,
+                                            const vector<int>& genotype, int ref_trav_idx,
+                                            const Snarl& child) const {
+    return chain_reported_inline(build_chain_inline_context(snarl, travs, genotype, ref_trav_idx),
+                                 child);
 }
 
 bool VCFOutputCaller::is_symbolically_reference(const vector<SnarlTraversal>& called_traversals,
@@ -7249,6 +7277,10 @@ void FlowCaller::run_deferred_descent() {
                 // conditional's second operand is a prvalue, so the composite is one too and the
                 // child list is COPIED for every revised record -- on the path whose whole point,
                 // two comments up, is not being O(revised x records).
+                // Child-independent half of the exactly-once rule, built once for this parent
+                // rather than once per child: see VCFOutputCaller::ChainInlineContext.
+                const ChainInlineContext pr_inline_ctx =
+                    build_chain_inline_context(pr.snarl, pr.travs, pr.genotype, pr.ref_trav_idx);
                 for (size_t ci : kids->second) {
                     PendingRecord& child = pending[ci];
                     bool known = true;
@@ -7272,8 +7304,7 @@ void FlowCaller::run_deferred_descent() {
                     const bool was = child.reported_inline;
                     child.reported_inline =
                         pr.reported_inline
-                        || chain_reported_inline(pr.snarl, pr.travs, pr.genotype, pr.ref_trav_idx,
-                                                 child.snarl);
+                        || chain_reported_inline(pr_inline_ctx, child.snarl);
                     if (was != child.reported_inline) {
                         ++bar_inline_rederived;
                     }
@@ -8062,6 +8093,10 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // dropping the subtree would drop it. Kept here so the invariant is a property of this code
             // rather than of a check somewhere else.
 
+            // Built once for this snarl, not once per child. Rebuilding it per child re-ran the
+            // reference and ALT projections and the O(n^2) symbolic_diff on identical inputs.
+            const ChainInlineContext inline_ctx =
+                build_chain_inline_context(snarl, travs, trav_genotype, ref_trav_idx);
             for (const Snarl* child : snarl_manager.children_of(managed_ptr)) {
                 if (child == nullptr || snarl_manager.is_trivial(child, graph)) {
                     continue;
@@ -8107,7 +8142,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                 // recorded and phased, and suppressed at the render hand-off instead.
                 bool child_reported_inline =
                     nested_context.reported_inline
-                    || chain_reported_inline(snarl, travs, trav_genotype, ref_trav_idx, *child);
+                    || chain_reported_inline(inline_ctx, *child);
 
                 int copies = child_ploidy(travs, trav_genotype, *child, ploidy);
                 bool retain_only = nested_context.retain_only;

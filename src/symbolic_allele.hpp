@@ -150,11 +150,12 @@ struct DiffBlock {
  * property: an unstable tie-break makes output depend on nothing the caller controls, and this
  * function's result decides how many records a snarl emits.
  *
- * The DP is O(|ref| x |alt|) in time and space. A traversal pair too large for that degrades to one
- * block spanning both alleles entirely -- which is exactly the whole-allele behaviour that predates
- * this function, so the caller stays correct rather than merely surviving. `out_degraded`, when
- * given, is set true in that case and only that case, so the population can be counted instead of
- * assumed to be empty.
+ * The DP runs inside Ukkonen's band, so it costs O((|ref| + |alt|) x D) in time and O(|ref| x D) in
+ * space, where D is the edit distance between the two projections -- the variation between the two
+ * alleles, not their length. There is no size cap and no degradation: an earlier version gave up
+ * above 4M cells and returned one block spanning both alleles entirely, which silently turned a
+ * structured difference into a whole-allele substitution on exactly the largest sites.
+ * `out_degraded`, when given, is now always set false; it is kept because callers read it.
  */
 /// `out_alt_before_ref`, when given, is filled with |ref| + 1 entries: entry i is the number of alt
 /// steps consumed strictly before reference step i, counting nothing inserted at boundary i. It is

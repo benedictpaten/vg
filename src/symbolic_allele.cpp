@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #include <unordered_map>
 
@@ -155,10 +156,13 @@ SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
                     if (found == at.end()) {
                         continue;
                     }
-                    for (int j : found->second) {
-                        if (j > i && (exit < 0 || j < exit)) {
-                            exit = j;
-                        }
+                    // index_positions fills each vector in increasing visit order, so it is sorted
+                    // and the first entry past i is the nearest exit. Scanning the whole vector
+                    // instead is O(k) in the node's recurrence, which is the dominant cost in
+                    // satellite where one node recurs thousands of times in a single traversal.
+                    auto it = std::upper_bound(found->second.begin(), found->second.end(), i);
+                    if (it != found->second.end() && (exit < 0 || *it < exit)) {
+                        exit = *it;
                     }
                 }
                 if (exit > i) {
@@ -230,36 +234,74 @@ vector<DiffBlock> symbolic_diff(const SymbolicAllele& ref, const SymbolicAllele&
         return {DiffBlock{0, (int)m, 0, (int)n}};
     }
 
-    // The cap is a backstop against a pathological traversal pair stalling a whole run, not a
-    // tuning knob: 4M cells is about 16 MB at 4 bytes each and far above anything the measured
-    // distribution reaches, so crossing it means something is wrong rather than merely large.
-    static const size_t MAX_CELLS = 4000000;
-    if (m * n > MAX_CELLS) {
-        if (out_degraded != nullptr) {
-            *out_degraded = true;
-        }
-        trivial_map(n);
-        return {DiffBlock{0, (int)m, 0, (int)n}};
-    }
+    // Ukkonen's band, not the full rectangle. Every cell on an optimal path satisfies
+    // |i - j| <= D, where D is the edit distance, so a band of half-width k >= D holds the whole
+    // optimum and everything outside it is provably worse. k starts at the length difference (the
+    // minimum any alignment must spend) and doubles until the corner value certifies itself by
+    // coming out <= k, which is Ukkonen's termination test. Work is O((m + n) * D) rather than
+    // O(m * n), and for two alleles of one site D is the actual variation between them, not their
+    // length.
+    //
+    // This REPLACES a 4M-cell cap that degraded large pairs to one whole-allele block. Nothing
+    // degrades now, so `out_degraded` is always false; it is kept because callers read it.
+    //
+    // Out-of-band cells read as INF, which is what makes the traceback below identical to the full
+    // matrix's: a cell outside the band has true value > D >= the value of any cell on the optimal
+    // path, so `at(i,j) == at(i-1,j) + 1` could never have held for it. Reading INF fails the same
+    // test the true value would have failed, so the same move is chosen at every step.
+    const uint32_t INF = std::numeric_limits<uint32_t>::max() / 4;
+    const size_t max_k = std::max(m, n);
+    size_t band_k = std::max<size_t>(1, m > n ? m - n : n - m);
+    vector<uint32_t> cost;
+    size_t stride = 0;
 
-    const size_t stride = n + 1;
-    vector<uint32_t> cost(stride * (m + 1));
-    auto at = [&](size_t i, size_t j) -> uint32_t& { return cost[i * stride + j]; };
-
-    for (size_t i = 0; i <= m; ++i) {
-        at(i, 0) = (uint32_t)i;
-    }
-    for (size_t j = 0; j <= n; ++j) {
-        at(0, j) = (uint32_t)j;
-    }
-    for (size_t i = 1; i <= m; ++i) {
-        for (size_t j = 1; j <= n; ++j) {
-            uint32_t diag = at(i - 1, j - 1) + (ref[i - 1] == alt[j - 1] ? 0u : 1u);
-            uint32_t del = at(i - 1, j) + 1u;
-            uint32_t ins = at(i, j - 1) + 1u;
-            at(i, j) = std::min(diag, std::min(del, ins));
+    // Read: INF outside the band. Write: only ever called in band.
+    auto cell = [&](size_t i, size_t j) -> uint32_t {
+        long long off = (long long)j - (long long)i + (long long)band_k;
+        if (off < 0 || off >= (long long)stride) {
+            return INF;
         }
+        return cost[i * stride + (size_t)off];
+    };
+    auto put = [&](size_t i, size_t j, uint32_t v) {
+        cost[i * stride + (size_t)((long long)j - (long long)i + (long long)band_k)] = v;
+    };
+
+    while (true) {
+        stride = 2 * band_k + 1;
+        cost.assign(stride * (m + 1), INF);
+        // Row and column initialisations, clipped to the band.
+        for (size_t i = 0; i <= m && i <= band_k; ++i) {
+            put(i, 0, (uint32_t)i);
+        }
+        for (size_t j = 0; j <= n && j <= band_k; ++j) {
+            put(0, j, (uint32_t)j);
+        }
+        for (size_t i = 1; i <= m; ++i) {
+            const size_t jlo = (i > band_k) ? i - band_k : 1;
+            const size_t jhi = std::min(n, i + band_k);
+            for (size_t j = jlo == 0 ? 1 : jlo; j <= jhi; ++j) {
+                uint32_t diag = cell(i - 1, j - 1);
+                uint32_t del = cell(i - 1, j);
+                uint32_t ins = cell(i, j - 1);
+                if (diag < INF) {
+                    diag += (ref[i - 1] == alt[j - 1] ? 0u : 1u);
+                }
+                if (del < INF) {
+                    del += 1u;
+                }
+                if (ins < INF) {
+                    ins += 1u;
+                }
+                put(i, j, std::min(diag, std::min(del, ins)));
+            }
+        }
+        if (cell(m, n) <= (uint32_t)band_k || band_k >= max_k) {
+            break;
+        }
+        band_k = std::min(max_k, band_k * 2);
     }
+    auto at = [&](size_t i, size_t j) -> uint32_t { return cell(i, j); };
 
     // Traceback. The preference order here IS the tie-break contract in the header: diagonal first
     // (match before substitute, since a match is the zero-cost diagonal), then deletion, then
