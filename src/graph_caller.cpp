@@ -5673,19 +5673,46 @@ TraversalSet FlowCaller::find_child_traversal_set(const SnarlTraversal& parent_t
     return result;
 }
 
-int FlowCaller::crossings_of_child(const SnarlTraversal& trav, const Snarl& child) {
+FlowCaller::TraversalNodeIndex FlowCaller::index_traversal_nodes(const SnarlTraversal& trav) {
+    TraversalNodeIndex visits;
+    for (int i = 0; i < trav.visit_size(); ++i) {
+        if (trav.visit(i).has_snarl()) {
+            continue;
+        }
+        visits[trav.visit(i).node_id()].push_back(i);
+    }
+    return visits;
+}
+
+int FlowCaller::crossings_of_child(const TraversalNodeIndex& visits, const Snarl& child) {
     const nid_t start = child.start().node_id();
     const nid_t end = child.end().node_id();
     // Count crossings: an entry at one boundary followed by the other. Order matters -- testing
     // for the two boundaries independently would count a traversal that touches both on
     // unrelated excursions, which is the bug in find_child_traversal_set.
+    //
+    // The same state machine as the scan this replaces, run over only the visits that can move
+    // it. A visit at any other node is a no-op there, so walking the two boundary nodes'
+    // positions merged in ascending order -- the order the scan met them -- gives the identical
+    // count. When the child's boundaries are the same node, one list carries both roles, exactly
+    // as the scan's `node == start || node == end` did.
+    static const vector<int> none;
+    auto s = visits.find(start);
+    auto e = visits.find(end);
+    const vector<int>& sp = (s == visits.end()) ? none : s->second;
+    const vector<int>& ep = (e == visits.end() || end == start) ? none : e->second;
     int crossings = 0;
     nid_t open = 0;
-    for (int i = 0; i < trav.visit_size(); ++i) {
-        if (trav.visit(i).has_snarl()) {
-            continue;
+    size_t i = 0, j = 0;
+    while (i < sp.size() || j < ep.size()) {
+        nid_t node;
+        if (j >= ep.size() || (i < sp.size() && sp[i] <= ep[j])) {
+            node = start;
+            ++i;
+        } else {
+            node = end;
+            ++j;
         }
-        nid_t node = trav.visit(i).node_id();
         if (open == 0 && (node == start || node == end)) {
             open = (node == start) ? end : start;
         } else if (open != 0 && node == open) {
@@ -5776,7 +5803,7 @@ vector<int> FlowCaller::sibling_order(const SnarlTraversal& first, const SnarlTr
     return order;
 }
 
-uint64_t FlowCaller::child_crossing_mask(const vector<SnarlTraversal>& travs,
+uint64_t FlowCaller::child_crossing_mask(const vector<TraversalNodeIndex>& visits,
                                          const Snarl& child, bool* known) {
     if (known != nullptr) {
         *known = true;
@@ -5785,7 +5812,7 @@ uint64_t FlowCaller::child_crossing_mask(const vector<SnarlTraversal>& travs,
     // traversal pair, so that is the space a crossing question has to be asked in; asking it in
     // emitted-allele space meant the answer had to be mapped, and the mapping is what two of this
     // caller's worst bugs lived in. There is nothing to map now -- bit i is "travs[i] crosses child".
-    if (travs.size() > 64) {
+    if (visits.size() > 64) {
         // Unknown rather than none: the mask cannot index this site's candidates.
         if (known != nullptr) {
             *known = false;
@@ -5793,24 +5820,24 @@ uint64_t FlowCaller::child_crossing_mask(const vector<SnarlTraversal>& travs,
         return 0;
     }
     uint64_t mask = 0;
-    for (size_t i = 0; i < travs.size(); ++i) {
-        if (crossings_of_child(travs[i], child) > 0) {
+    for (size_t i = 0; i < visits.size(); ++i) {
+        if (crossings_of_child(visits[i], child) > 0) {
             mask |= (uint64_t)1 << i;
         }
     }
     return mask;
 }
 
-int FlowCaller::child_ploidy(const vector<SnarlTraversal>& travs, const vector<int>& genotype,
+int FlowCaller::child_ploidy(const vector<TraversalNodeIndex>& visits, const vector<int>& genotype,
                              const Snarl& child, int cap) const {
     int copies = 0;
     bool capped = false;
 
     for (int allele : genotype) {
-        if (allele < 0 || allele >= (int)travs.size()) {
+        if (allele < 0 || allele >= (int)visits.size()) {
             continue;   // star or missing: that haplotype contributes no copy here
         }
-        int crossings = crossings_of_child(travs[allele], child);
+        int crossings = crossings_of_child(visits[allele], child);
         if (crossings > 1) {
             capped = true;
             crossings = 1;   // a cycle or tandem duplication; see the header comment
@@ -7281,10 +7308,16 @@ void FlowCaller::run_deferred_descent() {
                 // rather than once per child: see VCFOutputCaller::ChainInlineContext.
                 const ChainInlineContext pr_inline_ctx =
                     build_chain_inline_context(pr.snarl, pr.travs, pr.genotype, pr.ref_trav_idx);
+                // Likewise once for this parent, not once per child: see TraversalNodeIndex.
+                vector<TraversalNodeIndex> pr_visits;
+                pr_visits.reserve(pr.travs.size());
+                for (const SnarlTraversal& t : pr.travs) {
+                    pr_visits.push_back(index_traversal_nodes(t));
+                }
                 for (size_t ci : kids->second) {
                     PendingRecord& child = pending[ci];
                     bool known = true;
-                    child.parent_crossing = child_crossing_mask(pr.travs, child.snarl, &known);
+                    child.parent_crossing = child_crossing_mask(pr_visits, child.snarl, &known);
                     child.crossing_known = known;
                     // And the exactly-once rule, for the same reason and in the same place.
                     //
@@ -8086,6 +8119,12 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // reference and ALT projections and the O(n^2) symbolic_diff on identical inputs.
             const ChainInlineContext inline_ctx =
                 build_chain_inline_context(snarl, travs, trav_genotype, ref_trav_idx);
+            // Likewise once for this snarl, not once per child: see TraversalNodeIndex.
+            vector<TraversalNodeIndex> trav_visits;
+            trav_visits.reserve(travs.size());
+            for (const SnarlTraversal& t : travs) {
+                trav_visits.push_back(index_traversal_nodes(t));
+            }
             for (const Snarl* child : snarl_manager.children_of(managed_ptr)) {
                 if (child == nullptr || snarl_manager.is_trivial(child, graph)) {
                     continue;
@@ -8096,7 +8135,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                 bool child_off_reference = false;
                 if (ref_trav_idx >= 0 && ref_trav_idx < (int)travs.size()) {
                     vector<int> ref_only(1, ref_trav_idx);
-                    if (child_ploidy(travs, ref_only, *child, 1) == 0) {
+                    if (child_ploidy(trav_visits, ref_only, *child, 1) == 0) {
                         // VG_CALL_NO_REF_NESTED admits these instead of skipping them: genotyped and
                         // recorded into the linkage layer, but never emitted, because REF and POS for
                         // such a chain are undefined. One binary, two arms.
@@ -8133,7 +8172,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                     nested_context.reported_inline
                     || chain_reported_inline(inline_ctx, *child);
 
-                int copies = child_ploidy(travs, trav_genotype, *child, ploidy);
+                int copies = child_ploidy(trav_visits, trav_genotype, *child, ploidy);
                 bool retain_only = nested_context.retain_only;
                 if (copies <= 0) {
                     // No called allele reaches it *yet*. Visited anyway, while the reads for this
@@ -8189,7 +8228,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                 // snarl's own candidate traversals, which exist whether or not a line was written.
                 // That is what made the old mask unavailable for a collapsed parent.
                 nested_context.parent_crossing =
-                    child_crossing_mask(travs, *child, &crossing_known);
+                    child_crossing_mask(trav_visits, *child, &crossing_known);
                 nested_context.crossing_known = crossing_known;
                 size_t saved_generation = current_generation;
                 current_generation = saved_generation + 1;

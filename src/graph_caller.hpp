@@ -1675,16 +1675,24 @@ protected:
     ///
     /// Crossing means the child's start and end both appear in the parent traversal *in order*.
     /// Testing for them independently, as find_child_traversal_set does, counts a traversal that
+    /// Where each node id is visited in one traversal, ascending, snarl visits excluded. Built
+    /// once per traversal per snarl instead of rescanned per child: the crossing rule only ever
+    /// transitions on the child's two boundary nodes, so every other visit is dead weight -- and
+    /// a snarl with C children rescanned the whole traversal C times, which is quadratic in snarl
+    /// size because C and the traversal length both grow with it.
+    using TraversalNodeIndex = unordered_map<nid_t, vector<int>>;
+    static TraversalNodeIndex index_traversal_nodes(const SnarlTraversal& trav);
+
     /// happens to touch both boundaries on unrelated excursions.
     ///
     /// A single allele crossing a chain more than once -- a cycle or a tandem duplication -- would
     /// give a per-haplotype copy number above one. v1 caps rather than modelling that, and says so
     /// in the log, because the rest of the caller assumes ploidy in {1, 2}.
-    int child_ploidy(const vector<SnarlTraversal>& travs, const vector<int>& genotype,
+    int child_ploidy(const vector<TraversalNodeIndex>& visits, const vector<int>& genotype,
                      const Snarl& child, int cap) const;
 
     /// How many times one traversal crosses `child`, by the same in-order rule child_ploidy uses.
-    static int crossings_of_child(const SnarlTraversal& trav, const Snarl& child);
+    static int crossings_of_child(const TraversalNodeIndex& visits, const Snarl& child);
 
 public:
     /// Where along `trav` the child chain is entered, as a visit index, or -1 if `trav` does not
@@ -1730,7 +1738,7 @@ protected:
     /// Returns 0 -- unknown -- when there are more than 64 traversals, and sets `*known` to false
     /// there, so a caller can tell that 0 apart from "no traversal crosses" instead of silently
     /// conflating the two.
-    static uint64_t child_crossing_mask(const vector<SnarlTraversal>& travs,
+    static uint64_t child_crossing_mask(const vector<TraversalNodeIndex>& visits,
                                         const Snarl& child, bool* known = nullptr);
 
     /// Find all traversals through a child snarl that are consistent with a parent traversal.

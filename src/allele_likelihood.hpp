@@ -832,11 +832,18 @@ protected:
     /// per site, for the same reason as ReadScratch.
     static vector<int64_t> sorted_allele_keys(const vector<AlleleStep>& allele_steps);
 
+    /// Where each (node, orientation) occurs in the allele, ascending. The mirror of the
+    /// greedy walk's `read_last_visit`, and built once per allele for the same reason
+    /// `sorted_allele_keys` is: the positions do not mention the read.
+    using AlleleStepPositions = unordered_map<int64_t, vector<uint32_t>>;
+    static AlleleStepPositions index_allele_steps(const vector<AlleleStep>& allele_steps);
+
     /// Score one read against one allele with a single greedy left-to-right pass. The
     /// default, and the right one for short reads: see AlleleLikelihoodParams::realign.
     int32_t score_read_against_allele_greedy(const Alignment& aln,
                                              const vector<ReadStep>& read_steps,
                                              const vector<AlleleStep>& allele_steps,
+                                             const AlleleStepPositions& allele_positions,
                                              const EditAlignmentScorer& read_scorer,
                                              bool& placed_out, double& nat_adjust) const;
 

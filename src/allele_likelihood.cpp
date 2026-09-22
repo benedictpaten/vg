@@ -705,9 +705,22 @@ vector<int64_t> GraphAlignedAlleleLikelihoodCalculator::sorted_allele_keys(
 // contigs -- and nothing on SNVs, for 3.10x the CPU, because a 150 bp read barely diverges from an
 // allele and there is almost nothing for an optimal correspondence to resolve. So --realign is off
 // unless asked for, and --preset ont asks for it.
+GraphAlignedAlleleLikelihoodCalculator::AlleleStepPositions
+GraphAlignedAlleleLikelihoodCalculator::index_allele_steps(
+    const vector<AlleleStep>& allele_steps) {
+    AlleleStepPositions positions;
+    positions.reserve(allele_steps.size() * 2);
+    for (size_t j = 0; j < allele_steps.size(); ++j) {
+        positions[((int64_t)allele_steps[j].node_id << 1) | (int64_t)allele_steps[j].backward]
+            .push_back((uint32_t)j);
+    }
+    return positions;
+}
+
 int32_t GraphAlignedAlleleLikelihoodCalculator::score_read_against_allele_greedy(
     const Alignment& aln, const vector<ReadStep>& read_steps,
-    const vector<AlleleStep>& allele_steps, const EditAlignmentScorer& read_scorer,
+    const vector<AlleleStep>& allele_steps, const AlleleStepPositions& allele_positions,
+    const EditAlignmentScorer& read_scorer,
     bool& placed_out, double& nat_adjust) const {
 
     placed_out = !allele_steps.empty();
@@ -736,12 +749,20 @@ int32_t GraphAlignedAlleleLikelihoodCalculator::score_read_against_allele_greedy
         // Look for this read node ahead in the allele. Anchoring on shared node
         // visits is what makes this a read-off of the alignment the graph already
         // asserts rather than an alignment we invent.
+        // The first allele step at or after allele_index carrying this read node. Scanning
+        // forward for it costs O(|allele|) per read step, and since allele_index starts at 0
+        // every read walks to its own position before anchoring at all: 228,151 reads x ~724
+        // steps at chr20's largest snarl, against about three at an ordinary one. The
+        // positions are pushed in ascending j, so lower_bound returns exactly the element the
+        // scan would have stopped on.
         size_t found = numeric_limits<size_t>::max();
-        for (size_t j = allele_index; j < allele_steps.size(); ++j) {
-            if (allele_steps[j].node_id == read_step.node_id &&
-                allele_steps[j].backward == read_step.backward) {
-                found = j;
-                break;
+        auto positions = allele_positions.find(
+            ((int64_t)read_step.node_id << 1) | (int64_t)read_step.backward);
+        if (positions != allele_positions.end()) {
+            auto at = std::lower_bound(positions->second.begin(), positions->second.end(),
+                                       (uint32_t)allele_index);
+            if (at != positions->second.end()) {
+                found = *at;
             }
         }
 
@@ -1217,6 +1238,14 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
     for (const auto& steps : allele_steps) {
         allele_keys.push_back(sorted_allele_keys(steps));
     }
+    // Likewise once per allele, and only for the greedy walk, which is its only consumer.
+    vector<AlleleStepPositions> allele_positions;
+    if (!params.realign) {
+        allele_positions.reserve(allele_steps.size());
+        for (const auto& steps : allele_steps) {
+            allele_positions.push_back(index_allele_steps(steps));
+        }
+    }
 
     // Per-allele length for the depth term's lambda: the sequence over which a read
     // can become a row of this matrix, which is the traversal's **interior** only.
@@ -1423,7 +1452,8 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
                                                 read_scratch, allele_keys[a], read_scorer,
                                                 placed, nat_adjust)
                     : score_read_against_allele_greedy(*scored_aln, read_steps, allele_steps[a],
-                                                       read_scorer, placed, nat_adjust);
+                                                       allele_positions[a], read_scorer,
+                                                       placed, nat_adjust);
             // nat_adjust carries corrections the int32 score cannot express; see
             // AlleleLikelihoodParams::insertion_gap_nats. It is zero by default.
             row[a] = placed ? log_base * (double)score + nat_adjust
