@@ -7519,20 +7519,31 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
     // toggle average flow / flow width based on snarl length.  this is a bit inconsistent with
     // downstream which uses the longest traversal length, but it's a bit chicken and egg
     // todo: maybe use snarl length for everything?
+    //
+    // The cast is hoisted because the flow finder is the ONLY consumer of greedy_avg_flow -- it is
+    // read at exactly one place, the flow_trav_finder branch below. A run whose traversals come
+    // from the GBZ panel (which is what --read-likelihood selects by default) has a null flow
+    // finder, so this sum was computed and thrown away on every snarl. Skipping it there also stops
+    // an order-dependent computation from running on that path at all: the loop walks an
+    // unordered_set with an early exit, so which nodes it reaches depends on bucket order.
     const auto& support_finder = dynamic_cast<SupportBasedSnarlCaller&>(snarl_caller).get_support_finder();
+    FlowTraversalFinder* flow_trav_finder = dynamic_cast<FlowTraversalFinder*>(&traversal_finder);
     bool greedy_avg_flow = false;
     {
         auto snarl_contents = snarl_manager.deep_contents(&snarl, graph, false);
         if (snarl_contents.second.size() > max_snarl_edges) {
             // size cap needed as non-nested FlowCaller doesn't handle large snarls
             return false;
-        }        
-        size_t len_threshold = support_finder.get_average_traversal_support_switch_threshold();
-        size_t length = 0;
-        for (auto i = snarl_contents.first.begin(); i != snarl_contents.first.end() && length < len_threshold; ++i) {
-            length += graph.get_length(graph.get_handle(*i));
         }
-        greedy_avg_flow = length > len_threshold;
+        if (flow_trav_finder != nullptr) {
+            size_t len_threshold = support_finder.get_average_traversal_support_switch_threshold();
+            size_t length = 0;
+            for (auto i = snarl_contents.first.begin();
+                 i != snarl_contents.first.end() && length < len_threshold; ++i) {
+                length += graph.get_length(graph.get_handle(*i));
+            }
+            greedy_avg_flow = length > len_threshold;
+        }
     }
     
     handle_t start_handle = graph.get_handle(snarl.start().node_id(), snarl.start().backward());
@@ -7668,7 +7679,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
     // If use_parent_interval, ref_trav stays empty - we'll use first parent traversal as pseudo-reference
 
     vector<SnarlTraversal> travs;
-    FlowTraversalFinder* flow_trav_finder = dynamic_cast<FlowTraversalFinder*>(&traversal_finder);
     if (flow_trav_finder != nullptr) {
         // find the max flow traversals using specialized interface that accepts avg heurstic toggle
         pair<vector<SnarlTraversal>, vector<double>> weighted_travs = flow_trav_finder->find_weighted_traversals(snarl, greedy_avg_flow);
