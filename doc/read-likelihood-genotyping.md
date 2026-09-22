@@ -207,7 +207,7 @@ either side are unpaired. Everything below is about choosing that correspondence
 correspondence *costs* is identical under both walks.
 
 The **greedy walk** (default) makes one left-to-right pass, taking the first anchor it finds and
-never revising. The **optimal walk** (`--realign`, and `--preset ont`) searches the correspondence
+never revising. The **optimal walk** (`--realign`, off everywhere including under a preset) searches the correspondence
 space and takes the best-scoring one, subject to banding at large sites (below).
 
 The two walks agree on what a correspondence costs for deletions and for a single inserted visit.
@@ -1477,6 +1477,7 @@ spellings. General options that this mode also uses -- `-d`/`--ploidy`, `-R`/`--
 | Flag | Default | Effect |
 |---|---|---|
 | `--depth-term W` | 0.1 | Weight `w_d` on the Poisson depth term. 0 disables it. |
+| `--max-snarl-edges N` | off here, 10000 for the support callers | Refuse to genotype a snarl with more deep edges than this and call its children instead. Off under `--read-likelihood`: what the old 10000 declined -- 14 loci on 34-haplotype chr20, 7 on the 16-haplotype ONT graph -- costs about 49 s now that the per-snarl scans are indexed, and none of it is visible to F1 because Q100 covers 0.00% of chr20 alpha-satellite. Kept for the support callers, whose traversal finder the cap was written for and on which it has not been re-measured. |
 | `--depth-count-raw` | off | Count whole reads rather than `1 − e_r` in `N_eff` and `DR`. |
 | `--mismap-max P` | 0.7 | Upper clamp on `e_r`. Governs how far a low-MAPQ read is discounted; matters most on haplotype-rich graphs. |
 | `--mismap-min P` | 0.02 | Lower clamp on `e_r`, and so the bound on any one read's veto, `ln(P)`. |
@@ -1523,7 +1524,7 @@ spellings. General options that this mode also uses -- `-d`/`--ploidy`, `-R`/`--
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--preset ont` | — | `--gap-open 1 --gap-extend 1 --mismap-min 0.05 --realign --insertion-nats 0.9 --read-phasing --regenotype`. An explicit flag either side of it wins. [Above](#long-reads---preset-ont). |
+| `--preset ont` | — | `--gap-open 1 --gap-extend 1 --mismap-min 0.05 --insertion-nats 0.9 --read-phasing --regenotype`. NOT `--realign`: it costs 10.4x once `--max-snarl-edges` is off, for indel F1 +0.0042 that is all deletions. An explicit flag either side of it wins. [Above](#long-reads---preset-ont). |
 | `--gap-open N` | 6 | Read scorer's gap-open penalty. The default is a substitution-era number; 1 is right where the modal error is a homopolymer indel. |
 | `--gap-extend N` | 1 | Read scorer's gap-extension penalty. |
 

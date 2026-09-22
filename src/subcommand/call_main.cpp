@@ -147,15 +147,18 @@ void help_call(char** argv) {
          << "                            nats because one score unit is 1.3833 and the" << endl
          << "                            correction is finer than that. Off by default [0]" << endl
          << "      --realign             resolve the read-to-allele node correspondence" << endl
-         << "                            optimally rather than greedily. Worth +0.004 indel" << endl
-         << "                            F1 on ONT for +17% CPU; on short reads it buys" << endl
-         << "                            +0.0006 for 3.1x the CPU, so it is off unless" << endl
-         << "                            asked for. `--preset ont` turns it on [off]" << endl
-         << "      --no-realign          force the greedy walk even under a preset" << endl
+         << "                            optimally rather than greedily. On ONT it buys indel" << endl
+         << "                            F1 +0.0042, all of it DELETIONS (+0.0089); SNV and" << endl
+         << "                            insertion are marginally better without it. Off" << endl
+         << "                            everywhere, including under a preset, because with" << endl
+         << "                            the snarl-edge cap off it costs 10.4x on ONT [off]" << endl
+         << "      --no-realign          force the greedy walk, for a run that set --realign" << endl
          << "      --preset NAME         a fitted parameter set for one read type. None by" << endl
          << "                            default, so the values below are short-read ones." << endl
          << "                            `ont`: --gap-open 1 --gap-extend 1 --mismap-min" << endl
-         << "                            0.05 --read-phasing --regenotype. The scorer values" << endl
+         << "                            0.05 --insertion-nats 0.9 --read-phasing" << endl
+         << "                            --regenotype. NOT --realign: see there. The scorer" << endl
+         << "                            values" << endl
          << "                            move indel GT F1 0.749 -> 0.816 and ALL 0.926 ->" << endl
          << "                            0.945 on 43x ONT chr20 at no cost to SNVs," << endl
          << "                            reproducing at +0.061 on a held-out contig and" << endl
@@ -422,8 +425,9 @@ void help_call(char** argv) {
          << "                            (use to compare multiple samples)" << endl
          << "  -A, --all-snarls          call all snarls including nested (each independent)" << endl
          << "      --max-snarl-edges N   refuse to genotype a snarl with more deep edges than" << endl
-         << "                            this, calling its children instead; 0 lifts the cap" << endl
-         << "                            [10000]" << endl
+         << "                            this, calling its children instead. 0 means no cap." << endl
+         << "                            Off under --read-likelihood; 10000 for the support" << endl
+         << "                            callers, whose traversal finder it was written for" << endl
          << "  -c, --min-length N        genotype only snarls with" << endl
          << "                            at least one traversal of length >= N" << endl
          << "  -C, --max-length N        genotype only snarls where" << endl 
@@ -707,7 +711,9 @@ int main_call(int argc, char** argv) {
     const size_t max_depth_bin_width = 50000000;
     const double depth_scale_fac = 1.5;
     const size_t max_yens_traversals = traversals_only ? 100 : 50;
-    size_t max_snarl_edges_opt = 10000;   // FlowCaller's own default; --max-snarl-edges overrides
+    // Default resolved after parsing, because it differs by caller: see below.
+    size_t max_snarl_edges_opt = 0;
+    bool max_snarl_edges_explicit = false;
     // used to merge up snarls from chains when generating traversals
     const size_t max_chain_edges = 1000; 
     const size_t max_chain_trivial_travs = 5;
@@ -1168,6 +1174,7 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_MAX_SNARL_EDGES:
             max_snarl_edges_opt = parse<size_t>(optarg);
+            max_snarl_edges_explicit = true;
             break;
         case OPT_DEPTH_TERM:
             depth_weight = parse<double>(optarg);
@@ -1556,19 +1563,26 @@ int main_call(int argc, char** argv) {
                 // are unmeasured at any non-zero value.
                 insertion_gap_nats = 0.9;
             }
-            if (!realign_explicit) {
-                // Optimal rather than greedy read-to-allele correspondence. The greedy walk
-                // picks the pairing in one left-to-right pass and can never revise it; on ONT,
-                // where a read diverges from the allele over many nodes, that costs real
-                // accuracy. chr20 indel F1 0.86237 -> 0.86659 and chr6, held out, 0.88005 ->
-                // 0.88351, SNV F1 flat on both, for +17% CPU (1268s -> 1483s).
-                //
-                // Long reads only. A 150 bp read barely diverges from an allele, so there is
-                // almost nothing for an optimal correspondence to resolve: short reads gain
-                // +0.0006 indel on BOTH chr20 and chr6, and nothing on SNVs, for 3.10x
-                // the CPU.
-                realign = true;
-            }
+            // The preset leaves the read-to-allele correspondence GREEDY. `--realign` resolves
+            // it by DP instead of in one left-to-right pass, and it used to be set here: on ONT
+            // it was worth chr20 indel F1 0.86237 -> 0.86659 and chr6, held out, 0.88005 ->
+            // 0.88351, SNV flat on both, for +17% CPU.
+            //
+            // That price was measured with the snarl cap on, and the cap was hiding it. With
+            // `--max-snarl-edges` off, chr20 ONT runs 2259.7 s under `--realign` against 216.9 s
+            // greedy -- 10.4x, not 1.17x -- because the exact walk pays per read against the
+            // whole of a thousand-step allele at exactly the snarls the cap used to decline.
+            // Uncapped greedy is also no dearer than CAPPED greedy (216.9 s against 224.6 s), so
+            // the greedy walk is what makes genotyping every snarl affordable at all.
+            //
+            // Re-measured on one binary, same scoring path, capped, what the exact walk buys is
+            // narrower than "indels" suggested: ALL F1 +0.00080, indel +0.00422, and the whole
+            // of it is DELETIONS (+0.00885). SNV (+0.00016) and insertion (+0.00016) are a hair
+            // better WITHOUT it. `--realign` restores it for anyone who wants that trade.
+            //
+            // Dropping it also restores `--phase-min-q` to 9.5, which is the value fitted for
+            // the greedy walk; 8.5 was re-fitted for the exact one and is applied below only
+            // when `realign` is set.
             if (!regenotype_explicit) {
                 // The reads' phase decides the genotype, not only the order of a settled pair.
                 // chr20 ALL F1 0.94477 -> 0.95151 and indel 0.81568 -> 0.83725, with precision
@@ -2724,6 +2738,21 @@ int main_call(int argc, char** argv) {
     // again below this point, so the cast is done once. Null means a caller that emits no VCF,
     // which several of the options below treat as "the default declines" rather than as an error --
     // so the per-option null handling stays exactly where it is.
+    // The default differs by caller, because the cap's own reason to exist does.
+    //
+    // OFF under --read-likelihood. There the traversals come from the GBZ panel, the per-snarl
+    // cost has been indexed down to roughly what the work-count predicts, and the whole of what
+    // the old 10000 declined -- 14 loci on the 34-haplotype short-read chr20 graph, 7 on the
+    // 16-haplotype ONT one -- now costs about 49 s. A caller should not silently refuse a site.
+    //
+    // KEPT at 10000 for the support callers. There the traversals come from Yen's k-widest-paths
+    // with K = 50, `greedy_avg_flow` is actually consumed, and the cap's comment -- "non-nested
+    // FlowCaller doesn't handle large snarls" -- was written about that path and has not been
+    // re-measured on it. Turning it off there would be an unmeasured change to an arm none of the
+    // work above touched.
+    if (!max_snarl_edges_explicit) {
+        max_snarl_edges_opt = read_likelihood ? 0 : 10000;
+    }
     // Applied here rather than through a constructor argument: three of the branches above build
     // a FlowCaller and none of them takes the cap, so one cast after the fact keeps the option in
     // one place. A caller that is not a FlowCaller has no such cap to set.

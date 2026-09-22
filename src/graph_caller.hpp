@@ -1477,10 +1477,14 @@ protected:
     map<string, int> ref_ploidies;
 
     /// Refuse to genotype a snarl with more deep edges than this, leaving RecurseOnFail to
-    /// genotype its children instead. Settable so the refusal can be measured rather than
-    /// assumed: on HG002 chr20 it declines 14 loci on the 34-haplotype short-read graph and 7
-    /// on the 16-haplotype ONT one, and lifting it costs about 49 s on the short-read arm.
-    size_t max_snarl_edges = 10000;
+    /// genotype its children instead. OFF by default: a caller should not silently decline a
+    /// site. --max-snarl-edges restores a cap for anyone who wants one.
+    ///
+    /// What the old 10000 declined, on HG002 chr20: 14 loci on the 34-haplotype short-read
+    /// graph, the largest 452,519 edges, and 7 on the 16-haplotype ONT one. None of it is
+    /// visible to F1, because Q100's confident regions cover 0.00% of chr20's alpha-satellite
+    /// and that is where these snarls live.
+    size_t max_snarl_edges = numeric_limits<size_t>::max();
 
     /// alignment emitter. if not null, traversals will be output here and
     /// no genotyping will be done

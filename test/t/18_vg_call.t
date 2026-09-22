@@ -9,7 +9,7 @@ PATH=../bin:$PATH # for vg
 # FORMAT field shifts every later one, which broke four assertions here that were not
 # testing field order at all -- one of them silently compared BL against a GQ threshold.
 
-plan tests 436
+plan tests 438
 
 # Toy example of hand-made pileup (and hand inspected truth) to make sure some
 # obvious (and only obvious) SNPs are detected by vg call
@@ -740,7 +740,20 @@ is "$?" "1" "--no-realign without --read-likelihood is refused"
 
 vg call x.vg --read-likelihood --gam sim.gam -k x.pack --realign 2>/dev/null | grep -v "^#" > rl_ra.vcf
 is $(if [ $(wc -l < rl_ra.vcf | tr -d ' ') -gt 0 ]; then echo 1; else echo 0; fi) "1" "--realign is accepted and parsed with --read-likelihood"
+
 rm -f rl_ra.vcf
+
+# No preset selects the optimal walk any more, so nothing but an explicit --realign exercises it,
+# and a path no default reaches is a path that rots. The behavioural coverage for both walks is in
+# src/unittest/allele_likelihood_scoring.cpp, which runs its invariants under
+# `for (bool realign : {false, true})`; it is NOT here, because this fixture cannot tell the two
+# walks apart -- an equality asserted on it would hold because neither side moved, which is a test
+# that cannot fail. What this file can hold is the documented contract, which is what drifts first
+# when someone changes the preset.
+is $(vg call --help 2>&1 | grep -c -- "everywhere, including under a preset") "1" \
+   "--realign documents that no preset turns it on"
+is $(vg call --help 2>&1 | grep -c -- "NOT --realign") "1" \
+   "and the preset documents that it does not select the optimal walk"
 
 rm -f rl_dt.vcf rl_t1.vcf rl_t4.vcf rl_link_t1.vcf rl_link_t4.vcf rl_link_off.vcf rl_link_off_t4.vcf rl_link_default.vcf rl_nolink_pack.vcf rl_nolink_pack0.vcf rl_link_err.txt rl_link_err2.txt
 
