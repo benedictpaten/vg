@@ -7804,9 +7804,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
     };
 
 
-    // Constants for bounded traversal set handling
-    const int MAX_TRAVS_PER_SET = 10;
-
     if (traversals_only) {
         assert(gaf_output);
         pair<string, int64_t> pos_info = get_ref_position(graph, snarl, ref_path_name, ref_offset_of(ref_offsets, ref_path_name));
@@ -7821,8 +7818,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
         vector<int> set_membership(travs.size(), -1);
 
         // Merge traversals from sets into travs, tracking membership
-        // Also rank by support and keep top MAX_TRAVS_PER_SET per set
-        vector<vector<int>> set_to_trav_indices(ploidy);  // indices into travs for each set
 
         for (int set_idx = 0; set_idx < ploidy; ++set_idx) {
             const TraversalSet& tset = (*parent_child_trav_sets)[set_idx];
@@ -7834,8 +7829,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
 
             // Add traversals from this set to travs (avoiding duplicates)
             // Keep track of indices for this set
-            vector<pair<double, int>> support_and_idx;  // (support, index in travs)
-
             for (const SnarlTraversal& trav : tset) {
                 // Check if this traversal already exists in travs
                 int match_idx = -1;
@@ -7855,19 +7848,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                     set_membership[match_idx] = set_idx;
                 }
                 // Note: if already claimed by another set, that's fine (shared region)
-
-                // Get support for ranking
-                double support = TraversalSupportFinder::support_val(
-                    support_finder.get_traversal_support(trav));
-                support_and_idx.push_back({support, match_idx});
-            }
-
-            // Sort by support (descending) and keep top MAX_TRAVS_PER_SET
-            std::sort(support_and_idx.begin(), support_and_idx.end(),
-                      [](const auto& a, const auto& b) { return a.first > b.first; });
-
-            for (int i = 0; i < std::min((int)support_and_idx.size(), MAX_TRAVS_PER_SET); ++i) {
-                set_to_trav_indices[set_idx].push_back(support_and_idx[i].second);
             }
         }
 
@@ -8091,7 +8071,6 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // produced semantically garbage crossing masks that the barrier then used to gain,
             // drop and re-ploidy this snarl's descendants. The masks are recomputed at the barrier
             // if this chain is ever actually emitted.
-            const bool parent_alleles_valid = last_emit_valid && emitted_this_call;
             // Deferral turns on exactly one question: can linkage still move this snarl's genotype?
             // Only a snarl that reached the linkage layer can be rewritten, so one with no entry has
             // a final genotype already and its children are visited now, as they always were. That
@@ -8205,7 +8184,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
                     nested_context.chain_key =
                         (size_t)((uint64_t)cb.first * 1000003ULL) ^ (size_t)(uint64_t)cb.second;
                 }
-                bool crossing_known = parent_alleles_valid;
+                bool crossing_known = true;   // child_crossing_mask always sets it
                 // No dependence on the parent having emitted anything: the mask is over this
                 // snarl's own candidate traversals, which exist whether or not a line was written.
                 // That is what made the old mask unavailable for a collapsed parent.
