@@ -9,7 +9,7 @@ PATH=../bin:$PATH # for vg
 # FORMAT field shifts every later one, which broke four assertions here that were not
 # testing field order at all -- one of them silently compared BL against a GQ threshold.
 
-plan tests 438
+plan tests 439
 
 # Toy example of hand-made pileup (and hand inspected truth) to make sure some
 # obvious (and only obvious) SNPs are detected by vg call
@@ -862,9 +862,15 @@ rm -f pq_hi.txt pq_ok.txt
 vg call x.gbz --read-likelihood --gam sim.gam --anchors-out sq_default.tsv \
     --anchors-hom-split --read-phasing -t 1 2>/dev/null >/dev/null
 vg call x.gbz --read-likelihood --gam sim.gam --anchors-out sq_explicit.tsv \
-    --anchors-hom-split --read-phasing --split-min-q 0.5 --split-min-side 2 -t 1 2>/dev/null >/dev/null
+    --anchors-hom-split --read-phasing --split-min-q 0.5 --split-min-side 10 -t 1 2>/dev/null >/dev/null
 is $(if cmp -s sq_default.tsv sq_explicit.tsv; then echo 1; else echo 0; fi) "1" \
    "naming the split thresholds at their defaults changes nothing"
+# The gate above proves nothing unless this fixture exercises the threshold at all, and it once
+# named side 2 against a default of 10 and still passed. A non-default side must move the output.
+vg call x.gbz --read-likelihood --gam sim.gam --anchors-out sq_side2.tsv \
+    --anchors-hom-split --read-phasing --split-min-side 2 -t 1 2>/dev/null >/dev/null
+is $(if cmp -s sq_default.tsv sq_side2.tsv; then echo 1; else echo 0; fi) "0" \
+   "and a non-default --split-min-side does change it, so that gate can fire"
 
 # --split-min-q is FITTED, on chr20's phased-run length and confirmed on chr6, and it saturates
 # exactly at 0.5: the read-walkable run N50 is identical at 0.5, 0.25, 0.1 and 0.0 while the run's
@@ -912,7 +918,7 @@ rm -f
 vg call x.vg -k x.pack --split-min-side 0 -t 1 >/dev/null 2>sq_bad.txt
 is $(grep -c -- "--split-min-side must be at least 1" sq_bad.txt) "1" \
    "--split-min-side 0 is refused rather than silently disabling the side test"
-rm -f sq_default.tsv sq_explicit.tsv sq_noout.txt sq_bad.txt sq_lo.tsv sq_hi.tsv sq_lo.vcf sq_hi.vcf
+rm -f sq_default.tsv sq_explicit.tsv sq_side2.tsv sq_noout.txt sq_bad.txt sq_lo.tsv sq_hi.tsv sq_lo.vcf sq_hi.vcf
 rm -f hs_norp.tsv hs_norp.txt hs_rp.tsv hs_rp.txt
 
 # The owner column generalises past --read-likelihood: --anchors-*, --mosaic-* and --regeno-* each
@@ -1892,10 +1898,14 @@ printf 'W\tT\t1\tchr1\t0\t161\t>1>2>4>5>6\n' >> rlg_sim.gfa
 vg gbwt -G rlg_sim.gfa --gbz-format -g rlg_sim.gbz 2>/dev/null
 vg sim -x rlg_sim.gbz -n 300 -l 30 -a -s 11 --path "T#0#chr1#0" >  rlg.gam 2>/dev/null
 vg sim -x rlg_sim.gbz -n 300 -l 30 -a -s 13 --path "T#1#chr1#0" >> rlg.gam 2>/dev/null
-vg call rlg.gref.gbz --read-likelihood --gam rlg.gam -t 1 -s samp --phased \
+# --mismap-max is pinned. These reads come from `vg sim` and carry MAPQ 0, so e_r is the cap for
+# every read, and the cap then scales all the evidence at once instead of discounting the ambiguous
+# reads it exists for. 0.7 is the cap these expectations were set at; the default is swept against
+# real data, where mapping qualities vary.
+vg call rlg.gref.gbz --read-likelihood --mismap-max 0.7 --gam rlg.gam -t 1 -s samp --phased \
     -p x#0#chr1 > rlg_base.vcf 2>/dev/null
 # No env var: selecting a gref reference is itself the signal to descend into off-reference chains.
-vg call rlg.gref.gbz --read-likelihood --gam rlg.gam -t 1 -s samp --phased \
+vg call rlg.gref.gbz --read-likelihood --mismap-max 0.7 --gam rlg.gam -t 1 -s samp --phased \
     -P x#0#chr1 -P 'gref_x#0#chr1_' --linkage-scale 40 --progress \
     --mosaic-out rlg.mosaic.tsv > rlg_gref.vcf 2> rlg_gref.err
 rlg_row() { awk -F'\t' -v c="$2" '$1==c && $1!~/^#/' "$1"; }
@@ -2056,7 +2066,8 @@ vg view -Fv nesting/nested_snp_in_del.gfa > ns.vg 2>/dev/null
 vg sim -x ns.vg -P x -n 150 -l 4 -a -s 7 > ns_het.gam 2>/dev/null
 vg sim -x ns.vg -P 'a#2#y1#0' -n 150 -l 4 -a -s 8 >> ns_het.gam 2>/dev/null
 vg pack -x ns.vg -g ns_het.gam -o ns_het.pack 2>/dev/null
-vg call ns.vg -k ns_het.pack --top-down -Y -p x --read-likelihood --gam ns_het.gam 2>/dev/null > ns_rl.vcf
+# --mismap-max pinned for the reason given at the gref fixture: `vg sim` reads carry MAPQ 0.
+vg call ns.vg -k ns_het.pack --top-down -Y -p x --read-likelihood --mismap-max 0.7 --gam ns_het.gam 2>/dev/null > ns_rl.vcf
 
 is $(grep -v "^#" ns_rl.vcf | wc -l | tr -d ' ') "2" "nested read-likelihood emits both the parent and the child site"
 
@@ -2074,7 +2085,7 @@ is $(grep -v "^#" ns_rl.vcf | awk '$5=="*"' | wc -l | tr -d ' ') "1" "the nested
 
 # Independent nested calling (-A): every snarl genotyped on its own reads, with no
 # parent restriction and no phase propagation.
-vg call ns.vg -k ns_het.pack -A -p x --read-likelihood --gam ns_het.gam 2>/dev/null > ns_rl_a.vcf
+vg call ns.vg -k ns_het.pack -A -p x --read-likelihood --mismap-max 0.7 --gam ns_het.gam 2>/dev/null > ns_rl_a.vcf
 is "$?" "0" "--read-likelihood works with -A independent nested calling"
 is $(grep -v "^#" ns_rl_a.vcf | awk '$4=="CATG" && $5=="C"' | wc -l | tr -d ' ') "1" "-A independent calling finds the deletion"
 is $(grep -c "PS=" ns_rl_a.vcf | tr -d ' ') "0" "-A emits no PS tags, since it does not propagate phase"
@@ -2111,7 +2122,8 @@ vg view -Fv nesting/nested_snp_in_del_rev.gfa > nsr.vg 2>/dev/null
 vg sim -x nsr.vg -P x -n 150 -l 4 -a -s 7 > nsr_het.gam 2>/dev/null
 vg sim -x nsr.vg -P 'a#2#y1#0' -n 150 -l 4 -a -s 8 >> nsr_het.gam 2>/dev/null
 vg pack -x nsr.vg -g nsr_het.gam -o nsr_het.pack 2>/dev/null
-vg call nsr.vg -k nsr_het.pack --top-down -Y -p x --read-likelihood --gam nsr_het.gam 2>nsr_rl.err > nsr_rl.vcf
+# --mismap-max pinned, as for the forward-path fixture above.
+vg call nsr.vg -k nsr_het.pack --top-down -Y -p x --read-likelihood --mismap-max 0.7 --gam nsr_het.gam 2>nsr_rl.err > nsr_rl.vcf
 
 is $(grep -v "^#" nsr_rl.vcf | wc -l | tr -d ' ') "2" "a backwards reference path still emits both the parent and the child site"
 is $(grep -v "^#" nsr_rl.vcf | awk '$5=="*"' | wc -l | tr -d ' ') "1" "the nested site is a star allele on a backwards reference path too"
@@ -2124,7 +2136,7 @@ is "$([ "${REV_SITES:-0}" -ge 1 ] && echo yes || echo no)" "yes" "the reversed-s
 
 # And the control: the forward twin must NOT take that branch, or the counter is measuring something
 # other than reversal.
-vg call ns.vg -k ns_het.pack --top-down -Y -p x --read-likelihood --gam ns_het.gam 2>ns_fwd.err >/dev/null
+vg call ns.vg -k ns_het.pack --top-down -Y -p x --read-likelihood --mismap-max 0.7 --gam ns_het.gam 2>ns_fwd.err >/dev/null
 is "$(sed -n 's/.*resolve, \([0-9]*\) resolved as the reversal.*/\1/p' ns_fwd.err | head -1)" "0" "a forward reference path never takes the reversed branch"
 
 rm -f nsr.vg nsr_het.gam nsr_het.pack nsr_rl.vcf nsr_rl.err ns_fwd.err
@@ -2776,7 +2788,8 @@ vg sim -x fx_sim.gbz -n 600 -l 40 -a -s 23 --path "T#1#chr1#0" >> fx.gam 2>/dev/
 # alleles rather than switching haplotype, and the mosaic collapses to one segment per strand. A
 # scale on the order of the site spacing is what makes this graph behave like a real contig. The
 # result is stable over 30..60.
-vg call fx.gbz --read-likelihood --gam fx.gam -t 1 -s samp --phased --linkage-scale 40 \
+# --mismap-max pinned for the reason given at the gref fixture: `vg sim` reads carry MAPQ 0.
+vg call fx.gbz --read-likelihood --mismap-max 0.7 --gam fx.gam -t 1 -s samp --phased --linkage-scale 40 \
     --mosaic-out fx.mosaic.tsv --progress >/dev/null 2>fx.err
 is "$?" 0 "vg call runs on the mosaic structural fixture"
 

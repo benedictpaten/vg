@@ -70,7 +70,7 @@ that improves a read's fit to *all* of a site's alleles equally divides straight
 ### `e_r` — the mismapping probability
 
 ```
-e_r = clamp( phred_to_prob(MAPQ_r), --mismap-min, --mismap-max )      default clamp [0.02, 0.7]
+e_r = clamp( phred_to_prob(MAPQ_r), --mismap-min, --mismap-max )      default clamp [0.02, 0.95]
 ```
 
 `e_r` is the probability that read `r` did not come from this locus at all. Such a read explains
@@ -87,6 +87,16 @@ own. MAPQ measures confidence that a read is in the right *place*; it says nothi
 the read's path through this particular site is right. A locally misaligned read is still MAPQ 60.
 The floor is what caps that read's veto, so `--mismap-min` reads as *"P(this read's evidence here
 is unreliable, for any reason)"*.
+
+The ceiling does the opposite job. A read's largest possible effect on any genotype comparison is
+`−ln(e_r)`, so the ceiling sets the least a read the mapper could not place still counts. It binds
+only where the raw probability exceeds it: at the default 0.95 that is MAPQ 0 alone (MAPQ 1 is
+0.794, MAPQ 2 is 0.631), which leaves a MAPQ-0 read 1.3% of a well-placed read's vote. On a
+haplotype-rich graph those reads are numerous -- ties between near-identical placements rather
+than unmappable reads -- and a lower ceiling lets them out-vote well-placed reads, mostly as
+spurious structural variants. Whole genome, 0.95 against 0.7 gives SV F1 +0.0021 with
+small-variant F1 unchanged; 0.99 gains nothing further and costs small variants. The ceiling can
+never reach 1: a read at `e_r = 1` contributes `log(1) = 0` to every genotype and vanishes.
 
 `--no-mismap-term` does not set `e_r = 0`. It sets `e_r = --mismap-min` for every read, removing
 the MAPQ *dependence* while keeping the floor — because removing the bound entirely is not a
@@ -1479,7 +1489,7 @@ spellings. General options that this mode also uses -- `-d`/`--ploidy`, `-R`/`--
 | `--depth-term W` | 0.1 | Weight `w_d` on the Poisson depth term. 0 disables it. |
 | `--max-snarl-edges N` | off here, 10000 for the support callers | Refuse to genotype a snarl with more deep edges than this and call its children instead. Off under `--read-likelihood`: what the old 10000 declined -- 14 loci on 34-haplotype chr20, 7 on the 16-haplotype ONT graph -- costs about 49 s now that the per-snarl scans are indexed, and none of it is visible to F1 because Q100 covers 0.00% of chr20 alpha-satellite. Kept for the support callers, whose traversal finder the cap was written for and on which it has not been re-measured. |
 | `--depth-count-raw` | off | Count whole reads rather than `1 − e_r` in `N_eff` and `DR`. |
-| `--mismap-max P` | 0.7 | Upper clamp on `e_r`. Governs how far a low-MAPQ read is discounted; matters most on haplotype-rich graphs. |
+| `--mismap-max P` | 0.95 | Upper clamp on `e_r`. Governs how far a low-MAPQ read is discounted; matters most on haplotype-rich graphs. At the default it binds on MAPQ 0 alone, so it is inert under any `--read-min-mapq` of 1 or more. |
 | `--mismap-min P` | 0.02 | Lower clamp on `e_r`, and so the bound on any one read's veto, `ln(P)`. |
 | `--no-mismap-term` | off | Fix `e_r = --mismap-min` for every read, removing the MAPQ dependence. |
 | `--flat-mixture` | off | `w_h = 1/ploidy` instead of length-weighted. Restores the pre-correction mixture; the depth term keeps its read-length estimate and is unaffected. |

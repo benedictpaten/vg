@@ -558,41 +558,33 @@ struct AlleleLikelihoodParams {
     /// precision 0.9937 -> 0.9934. Above 0.10 everything degrades on both graphs.
     double min_mismap_prob = 0.02;
 
-    /// The *cap* is what stops the model believing MAPQ when MAPQ is low, and how much
-    /// it matters is a property of the graph rather than a constant.
+    /// The *cap* on e_r. It binds only on reads whose MAPQ-derived probability exceeds it,
+    /// so it decides how much a read the mapper could not place still counts.
     ///
-    /// Default raised from 0.1 to 0.5 on measurement. 0.1 was set when the evaluation
-    /// graph had 4 haplotypes, where it was correctly measured as inert -- only 6.3% of
-    /// reads sat at MAPQ <= 9, so the cap almost never bound. On a 34-haplotype graph
-    /// that population is a quarter of the evidence at the sites that go wrong. Extra
-    /// haplotypes do not mainly produce *unmappable* reads -- MAPQ 0 gets rarer -- they
-    /// produce **two-way ties** between near-identical placements: reads that fit the
-    /// graph better than before (identity 0.921 -> 0.965 at those sites) but cannot be
-    /// placed. There, MAPQ 1 alone is 23.3% of reads; MAPQ 1 means p(wrong) = 0.79,
-    /// which 0.1 understates 7.9x, and across all reads where the cap binds it discards
-    /// 8.1x of the mapper's stated doubt. The model then hears confident support for a
-    /// second allele and calls a heterozygote -- 95% of the spurious calls were het.
+    /// Why a cap is needed at all: vg's mappers derive MAPQ from distinct graph placements,
+    /// so on a haplotype-rich graph a large population sits at MAPQ 0-1 -- not unmappable,
+    /// but tied between near-identical placements (on the 34-haplotype chr20 graph, MAPQ 1
+    /// alone is 23.3% of the reads at the sites that go wrong). A low cap understates that
+    /// doubt and gives those reads confident votes; they out-vote well-placed reads, and
+    /// the errors are spurious heterozygotes and structural variants.
     ///
-    /// At 0.5, on HG002 chr20 against the GIAB draft benchmark: false-positive SNVs
-    /// 1,597 -> 443 on the 34-haplotype graph (94% of the excess over the 4-haplotype
-    /// one), SNV precision 0.9776 -> 0.9937, overall GT F1 0.9460 -> 0.9520. On the
-    /// 4-haplotype graph it is neutral -- 375 -> 376 false SNVs, F1 0.9482 -> 0.9479 --
-    /// so it costs nothing where it does not apply. The effect saturates above 0.5 (0.9
-    /// gives 0.9517), because beyond that the cap only reaches MAPQ 0-3, so the exact
-    /// value is not delicate.
+    /// 0.95 is measured whole-genome: HG002 short reads, 34-haplotype graph, T2T-Q100,
+    /// paired 1 Mb block bootstrap. Against 0.7 it gives SV F1 +0.0021 [+0.0008, +0.0033]
+    /// (+0.0020 with chr20 held out) with small-variant errors unchanged (ALL, SNV and
+    /// indel F1 each within 1e-4, n.s.). Above raw 0.794 the cap binds on MAPQ 0 alone, as
+    /// MAPQ 1 falls back to its own 0.794; 0.99 is worse than 0.95 -- no further SV gain and
+    /// a significant small-variant cost. Excluding low-MAPQ reads outright
+    /// (--read-min-mapq) is a different lever: it removes more SV errors but abandons sites
+    /// covered only by such reads, which costs SNV recall.
     ///
-    /// The cap cannot simply be removed, and the reason is structural rather than
-    /// empirical: at e_r = 1 the per-read term becomes log((1-1)*mixture + 1) = 0 for
-    /// every genotype, so the read contributes nothing to any of them and silently
-    /// disappears. Many mappers also use MAPQ 0 to mean "multi-mapping" rather than
-    /// literally P(wrong) = 1. So the cap has to stay strictly below 1; 0.5 says
-    /// believe the mapper, but never let one read count for less than half a read.
+    /// The cap must stay strictly below 1: at e_r = 1 the per-read term is
+    /// log((1-1)*mixture + 1) = 0 for every genotype, so the read silently vanishes.
     ///
-    /// The two clamps are not interchangeable. The cap governs *placement* ambiguity
-    /// and shows up in SNVs; the floor governs how hard one read may veto an allele and
-    /// shows up in indels -- and raising the floor makes SNV precision slightly worse.
-    /// Tuning either against an aggregate F1 hides what the other is doing.
-    double max_mismap_prob = 0.7;
+    /// The two clamps are not interchangeable. The cap governs *placement* ambiguity and
+    /// shows up in SNVs and SVs; the floor governs how hard one read may veto an allele and
+    /// shows up in indels. Tuning either against an aggregate F1 hides what the other does.
+    /// Under any MAPQ floor of 1 or more the cap is inert, so --preset ont is unaffected.
+    double max_mismap_prob = 0.95;
 
     /// Turn the mismapping term off entirely, so its contribution can be
     /// measured rather than assumed. With it off, e_r is pinned to the minimum,

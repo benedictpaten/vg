@@ -135,7 +135,9 @@ void help_call(char** argv) {
          << "      --mismap-max P        upper clamp on the MAPQ-derived mismapping" << endl
          << "                            probability. Governs how much a read's placement" << endl
          << "                            ambiguity counts, so it matters most on graphs with" << endl
-         << "                            many similar haplotypes [0.7]" << endl
+         << "                            many similar haplotypes. At the default it binds on" << endl
+         << "                            MAPQ 0 alone, so any MAPQ floor of 1 or more makes" << endl
+         << "                            it inert [0.95]" << endl
          << "      --mismap-min P        lower clamp: floor on how unreliable any read may" << endl
          << "                            be, capping one read's veto at ln(P). Covers local" << endl
          << "                            misalignment, which MAPQ does not measure. Mainly an" << endl
@@ -697,7 +699,7 @@ int main_call(int argc, char** argv) {
     bool flat_mixture = false;
     double depth_weight = 0.1;
     bool depth_count_raw = false;
-    double max_mismap_prob = 0.7;
+    double max_mismap_prob = 0.95;
     double min_mismap_prob = 0.02;
     // 0 globally, 10 under --preset ont. GLOBAL is not safe: simulated reads carry MAPQ 0, so a
     // global 10 discards every read and emits no variants at all -- 65 of this suite's tests fail
