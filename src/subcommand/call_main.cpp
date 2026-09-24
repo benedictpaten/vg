@@ -428,8 +428,10 @@ void help_call(char** argv) {
          << "  -A, --all-snarls          call all snarls including nested (each independent)" << endl
          << "      --max-snarl-edges N   refuse to genotype a snarl with more deep edges than" << endl
          << "                            this, calling its children instead. 0 means no cap." << endl
-         << "                            Off under --read-likelihood; 10000 for the support" << endl
-         << "                            callers, whose traversal finder it was written for" << endl
+         << "                            Off under --read-likelihood with panel enumeration" << endl
+         << "                            (its default); 10000 otherwise, --enumerate-support" << endl
+         << "                            included, since Yen's traversal finder is what it" << endl
+         << "                            was written for" << endl
          << "  -c, --min-length N        genotype only snarls with" << endl
          << "                            at least one traversal of length >= N" << endl
          << "  -C, --max-length N        genotype only snarls where" << endl 
@@ -2748,20 +2750,27 @@ int main_call(int argc, char** argv) {
     // again below this point, so the cast is done once. Null means a caller that emits no VCF,
     // which several of the options below treat as "the default declines" rather than as an error --
     // so the per-option null handling stays exactly where it is.
-    // The default differs by caller, because the cap's own reason to exist does.
+    // The default depends on where the traversals come from, because the cap's own reason to
+    // exist does.
     //
-    // OFF under --read-likelihood. There the traversals come from the GBZ panel, the per-snarl
-    // cost has been indexed down to roughly what the work-count predicts, and the whole of what
-    // the old 10000 declined -- 14 loci on the 34-haplotype short-read chr20 graph, 7 on the
-    // 16-haplotype ONT one -- now costs about 49 s. A caller should not silently refuse a site.
+    // OFF under --read-likelihood with panel enumeration. There the traversals come from the
+    // haplotypes, the per-snarl cost has been indexed down to roughly what the work-count
+    // predicts, and the whole of what the old 10000 declined -- 14 loci on the 34-haplotype
+    // short-read chr20 graph, 7 on the 16-haplotype ONT one -- now costs about 49 s. A caller
+    // should not silently refuse a site.
     //
-    // KEPT at 10000 for the support callers. There the traversals come from Yen's k-widest-paths
-    // with K = 50, `greedy_avg_flow` is actually consumed, and the cap's comment -- "non-nested
-    // FlowCaller doesn't handle large snarls" -- was written about that path and has not been
-    // re-measured on it. Turning it off there would be an unmeasured change to an arm none of the
-    // work above touched.
+    // KEPT at 10000 wherever the traversals come from Yen's k-widest-paths with K = 50: the
+    // support callers, and --read-likelihood under --enumerate-support or on a GBZ too thin to
+    // enumerate from. `greedy_avg_flow` is consumed there, and the cap's comment -- "non-nested
+    // FlowCaller doesn't handle large snarls" -- was written about that path. Lifting it under
+    // --enumerate-support takes chr20 short reads from 157 s to 872 s wall and 6.8 to 8.6 GB peak,
+    // almost all of it one thread inside Yen's search on the pericentromeric giants, for the same
+    // small-variant TP/FN/FP to the record and one more SV false positive.
+    //
+    // Also kept for the support callers under -z/-g, which do enumerate from a panel: that
+    // configuration was not part of the measurement above.
     if (!max_snarl_edges_explicit) {
-        max_snarl_edges_opt = read_likelihood ? 0 : 10000;
+        max_snarl_edges_opt = (read_likelihood && gbwt_enumeration) ? 0 : 10000;
     }
     // Applied here rather than through a constructor argument: three of the branches above build
     // a FlowCaller and none of them takes the cap, so one cast after the fact keeps the option in
