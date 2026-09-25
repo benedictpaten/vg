@@ -1008,6 +1008,11 @@ void VCFOutputCaller::finalise_linkage_outputs() {
              << " sites recorded onto a key that already had a live entry; the retract path cannot"
              << " address these" << endl;
     }
+    if (linkage_collector->model_params().hp_prior > 0.0) {
+        cerr << "[vg call] linkage: " << linkage_collector->num_site_prior_entries()
+             << " live entries decoded at a run-length site's own frequency exponent (--hp-prior)"
+             << endl;
+    }
     if (emit_phasing) {
         // The wildcard count is the honest caveat on a chromosome-length phase block: at
         // those sites the panel does not name a strand, so the phase either side of them
@@ -5945,7 +5950,7 @@ pair<string, size_t> FlowCaller::site_ref_key(const Snarl& snarl, const string& 
 
 void FlowCaller::record_site(const Snarl& snarl, const vector<SnarlTraversal>& travs,
                             const vector<int>& trav_genotype,
-                            const unique_ptr<SnarlCaller::CallInfo>& call_info,
+                            const unique_ptr<SnarlCaller::CallInfo>& call_info, int ref_trav_idx,
                             const string& ref_path_name, int ref_offset,
                             bool no_reference, int64_t anchor_position) {
     if (linkage_collector == nullptr) {
@@ -6013,7 +6018,22 @@ void FlowCaller::record_site(const Snarl& snarl, const vector<SnarlTraversal>& t
             .emitted = false,
             .unpositioned = no_reference,
             .chain_key = nested_context.chain_key,
+            .freq_prior = site_freq_prior(travs, ref_trav_idx),
         });
+}
+
+double FlowCaller::site_freq_prior(const vector<SnarlTraversal>& travs, int ref_trav_idx) const {
+    const LinkageModel::Params& params = linkage_collector->model_params();
+    if (params.hp_prior <= 0.0) {
+        return -1.0;
+    }
+    vector<string> alleles;
+    alleles.reserve(travs.size());
+    for (const SnarlTraversal& trav : travs) {
+        alleles.push_back(trav_string(graph, trav));
+    }
+    const size_t ref = ref_trav_idx >= 0 ? (size_t)ref_trav_idx : (size_t)-1;
+    return LinkageModel::run_length_site(alleles, params.hp_prior_run, ref) ? params.hp_prior : -1.0;
 }
 
 bool FlowCaller::snarl_is_leaf(const Snarl& snarl) const {
@@ -7270,6 +7290,7 @@ void FlowCaller::run_deferred_descent() {
                         .generation = pr.generation,
                         .emitted = false,
                         .chain_key = pr.chain_key,
+                        .freq_prior = site_freq_prior(pr.travs, pr.ref_trav_idx),
                     });
                 if (!linkage_collector->has_entry(pr.record_key)) {
                     // `record` builds nothing for a site whose compact space it cannot describe -- no
@@ -7817,7 +7838,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // ret_val at the call site, which gates recursion -- so it must not become "the line
             // was written", which is not known yet. A staged record is a record that will be
             // written.
-            record_site(snarl, travs, trav_genotype, trav_call_info, ref_path_name,
+            record_site(snarl, travs, trav_genotype, trav_call_info, ref_trav_idx, ref_path_name,
                         ref_offset_of(ref_offsets, ref_path_name));
             render_this = stage_render_record(snarl, trav_genotype, ref_trav_idx, trav_call_info,
                                               ref_path_name, ref_offset_of(ref_offsets, ref_path_name), ploidy);
@@ -7967,7 +7988,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // `added = true`, following the retain_only precedent: ret_val below gates descent into
             // this chain's own children, so reporting "no line" as added=false would silently prune
             // every grandchild under every off-reference chain, and that branch has no counter.
-            record_site(snarl, travs, trav_genotype, trav_call_info, ref_path_name,
+            record_site(snarl, travs, trav_genotype, trav_call_info, ref_trav_idx, ref_path_name,
                         ref_offset_of(ref_offsets, ref_path_name), /*no_reference*/ true,
                         // The parent's interval, which `use_parent_interval` put here.
                         get<0>(ref_interval) + ref_offset_of(ref_offsets, ref_path_name));
@@ -7991,7 +8012,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // -- but it is genotyped and recorded like any other site, because its allele pair is
             // what phases everything inside it. Ordered after `retain_only`, which deliberately does
             // not record: a chain no called allele reaches is recorded by the barrier or not at all.
-            record_site(snarl, travs, trav_genotype, trav_call_info, ref_path_name,
+            record_site(snarl, travs, trav_genotype, trav_call_info, ref_trav_idx, ref_path_name,
                         ref_offset_of(ref_offsets, ref_path_name));
             added = true;
         } else if (!gaf_output) {
@@ -8000,7 +8021,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             // line, via the fallback record() there. Recording it now would make respecify succeed
             // where it currently falls through, which moves the `gained` count -- a real change, and
             // one for stage 10 to make on purpose rather than for this motion to make by accident.
-            record_site(snarl, travs, trav_genotype, trav_call_info, ref_path_name,
+            record_site(snarl, travs, trav_genotype, trav_call_info, ref_trav_idx, ref_path_name,
                         ref_offset_of(ref_offsets, ref_path_name));
             // Staged, not emitted -- the same discipline the top-level branch already follows, and
             // the reason both of stage 10's residual counts were non-zero. Emitting here writes the

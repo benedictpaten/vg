@@ -1443,5 +1443,83 @@ TEST_CASE("A revised site stops being unemitted when the revision writes a line"
     REQUIRE(revised->position == 1013);
 }
 
+
+TEST_CASE("A run-length site is two alleles one homopolymer length apart", "[linkage_model]") {
+    // In scope: the same base, inserted or deleted, inside a run of at least min_run.
+    REQUIRE(LinkageModel::run_length_site({"CAAAAAAAAT", "CAAAAAAAT"}, 8));
+    REQUIRE(LinkageModel::run_length_site({"CAAAAAAAT", "CAAAAAAAAAT"}, 8));
+    // Either order, and among more than two alleles.
+    REQUIRE(LinkageModel::run_length_site({"CGT", "CAAAAAAAAAT", "CAAAAAAAT"}, 8));
+    // The run is measured in the longer allele of the pair: 8 there, 7 in the shorter.
+    REQUIRE(LinkageModel::run_length_site({"C" + string(8, 'A') + "T", "C" + string(7, 'A') + "T"}, 8));
+    REQUIRE_FALSE(LinkageModel::run_length_site({"C" + string(7, 'A') + "T", "C" + string(6, 'A') + "T"}, 8));
+    // Not in scope: a substitution, a mixed-base insertion, a tandem repeat, a lone allele.
+    REQUIRE_FALSE(LinkageModel::run_length_site({"CAAAAAAAAAT", "CAAAAGAAAAT"}, 8));
+    REQUIRE_FALSE(LinkageModel::run_length_site({"CAAAAAAAAAT", "CAAAAAAAAAGAT"}, 8));
+    REQUIRE_FALSE(LinkageModel::run_length_site({"CACACACACACACAT", "CACACACACACACACAT"}, 8));
+    REQUIRE_FALSE(LinkageModel::run_length_site({"CAAAAAAAAAT"}, 8));
+    // A base inserted beside a run of a different base is not a run-length change of that run.
+    REQUIRE_FALSE(LinkageModel::run_length_site({"CAAAAAAAAAT", "CAAAAAAAAAGT"}, 8));
+    // Over 49 bp apart is not a homopolymer miscount.
+    REQUIRE_FALSE(LinkageModel::run_length_site({"C" + string(80, 'A') + "T", "C" + string(20, 'A') + "T"}, 8));
+    // A run that reaches an end of the allele continues into a boundary node the graph cut it at,
+    // so it counts as long however short it looks inside the allele.
+    REQUIRE(LinkageModel::run_length_site({"TTTTCAAA", "TTTCAAA"}, 11));
+    REQUIRE(LinkageModel::run_length_site({"GAAT", "GAATT"}, 11));
+    REQUIRE_FALSE(LinkageModel::run_length_site({"GCAAAAT", "GCAAAT"}, 11));
+    // With a reference allele named, only pairs that include it count: two ALTs a poly-A length
+    // apart do not put a site in scope when neither is a run-length change of the reference.
+    const vector<string> alts{"CGT", "C" + string(9, 'A') + "T", "C" + string(10, 'A') + "T"};
+    REQUIRE(LinkageModel::run_length_site(alts, 8));
+    REQUIRE_FALSE(LinkageModel::run_length_site(alts, 8, 0));
+    REQUIRE(LinkageModel::run_length_site(alts, 8, 1));
+}
+
+TEST_CASE("A site's own exponent replaces freq_prior in its decode, and only there", "[linkage_model]") {
+    // Reads mildly prefer 0/1; three of four panel haplotypes carry allele 0. A strong enough
+    // exponent at site 1 lets the panel's 0/0 win there, and must leave site 2 untouched.
+    LinkageModel::Params p;
+    p.weight = 0.0;  // memoryless, so each site is its own emission times its own prior
+    p.freq_prior = 1.0;
+    LinkageModel model(p);
+    vector<LinkageModel::Site> sites{
+        biallelic(1000, -1.0, 0.0, -20.0, {0, 0, 0, 1}),
+        biallelic(1200, -1.0, 0.0, -20.0, {0, 0, 0, 1}),
+    };
+    auto base = model.posteriors(sites);
+    REQUIRE(best_genotype(base[0]) == LinkageModel::genotype_index(0, 1));
+    sites[0].freq_prior = 60.0;
+    auto post = model.posteriors(sites);
+    REQUIRE(best_genotype(post[0]) == LinkageModel::genotype_index(0, 0));
+    for (double v : post[0]) {
+        REQUIRE(std::isfinite(v));
+    }
+    REQUIRE(post[1] == base[1]);
+}
+
+
+TEST_CASE("A site's exponent survives the collector into the decode", "[linkage_model]") {
+    // The path a lost field would take: SiteContext -> Entry -> Site. One site, so transitions do
+    // not matter; the reads mildly prefer 0/1 and three of four haplotypes carry allele 0.
+    for (double f : {-1.0, 60.0}) {
+        LinkageModel::Params p;
+        p.weight = 1.0;
+        p.freq_prior = 1.0;
+        LinkageCollector c(p, 4);
+        c.record("chr1", 1000, {{{0, 0}, -1.0}, {{0, 1}, 0.0}, {{1, 1}, -20.0}}, {0, 0, 0, 1}, 0, 1,
+                 {0, 1}, 11, 1.0, 2, 0, 0, LinkageCollector::SiteContext{.freq_prior = f});
+        REQUIRE(c.num_site_prior_entries() == (f >= 0.0 ? 1 : 0));
+        c.resolve();
+        int a = -1, b = -1;
+        size_t ploidy = 0;
+        REQUIRE(c.settled_traversals(11, &a, &b, &ploidy));
+        if (f < 0.0) {
+            REQUIRE(a != b);  // freq_prior 1 leaves the reads' 0/1
+        } else {
+            REQUIRE((a == 0 && b == 0));  // the site's own exponent lets the panel's 0/0 win
+        }
+    }
+}
+
 }
 }

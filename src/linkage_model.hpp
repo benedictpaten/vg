@@ -183,6 +183,22 @@ public:
         /// defaults its flag to 5.
         double freq_prior = 0.0;
 
+        /// A stronger exponent, in place of `freq_prior`, at a site whose alleles differ by the
+        /// length of a homopolymer run (see `run_length_site`). Zero, the default, turns it off and
+        /// every site decodes with `freq_prior`.
+        ///
+        /// Long-read basecallers miscount long runs in a way that belongs to the site rather than
+        /// the read, so the reads' votes there are not independent -- but the emission multiplies
+        /// them as if they were, and its margin grows with depth while `freq_prior` stays fixed. On
+        /// ONT chr20 that made indels in runs of 11 bp or more the one class whose F1 fell as depth
+        /// rose past 10-20x, while the panel had the better answer: under 5% of true hets there are
+        /// alleles 2 or fewer of 18 haplotypes carry, against 45% of the false ones. A stronger
+        /// exponent there keeps the panel's share of the decision from being outvoted. Letting it
+        /// also rise with the site's reads was measured and bought nothing significant.
+        double hp_prior = 0.0;
+        /// Shortest run, measured in the alleles' own sequence, that puts a site in scope.
+        size_t hp_prior_run = 11;
+
         /// Sites of exact inference per window, and the margin discarded at each end.
         ///
         /// Exact inference over a whole chain would serialise a caller that is otherwise parallel
@@ -201,6 +217,9 @@ public:
 
         /// Number of alleles, so genotype indices can be decoded.
         size_t num_alleles = 0;
+
+        /// The frequency exponent this site decodes with; negative means `Params::freq_prior`.
+        double freq_prior = -1.0;
 
         /// ln P(reads | genotype).
         ///
@@ -293,6 +312,19 @@ public:
     /// The wildcard haplotype's index, one past the panel. It carries any allele at any site, so
     /// a strand assigned to it is "explained by nothing in the panel" rather than by a haplotype.
     static constexpr size_t WILDCARD = (size_t)-1;
+
+    /// Whether the reference allele `ref` and another allele differ by a pure change in the length
+    /// of one homopolymer run -- the same base, 1-49 bp of it, inserted or deleted -- in a run at
+    /// least `min_run` long in the longer of the two. Any pair counts when `ref` is out of range,
+    /// which is a chain the reference does not cross.
+    ///
+    /// Measured inside the alleles, which include the snarl's boundary nodes -- and this graph cuts
+    /// a long run into a chain of small snarls whose boundary nodes are often a single base. So a
+    /// run that reaches either end of the allele counts as long whatever its length there: it
+    /// continues into the boundary node, and its real length is unknown. Without that rule 40% of
+    /// the sites in reference runs of 11 bp or more read short and were missed.
+    static bool run_length_site(const vector<string>& alleles, size_t min_run,
+                                size_t ref = (size_t)-1);
 
     /// Most probable path of haplotype pairs through the chain -- the *phasing*, as distinct from
     /// `posteriors()`, which decides each site on its own.
@@ -499,6 +531,9 @@ public:
         bool unpositioned = false;
         /// The chain's own boundary pair, hashed. Its identity, and the group key.
         size_t chain_key = 0;
+        /// This site's frequency exponent (`Params::hp_prior` at a run-length site); negative
+        /// means the model's `freq_prior`.
+        double freq_prior = -1.0;
     };
 
     /// Record one genotyped site. Safe to call from several threads.
@@ -783,6 +818,18 @@ public:
     /// cannot handle, so it has to be visible rather than inferred from a downstream oddity.
     size_t num_duplicate_live_keys() const { return duplicate_live_keys; }
 
+    const LinkageModel::Params& model_params() const { return params; }
+
+    /// Live entries that decode at a site-specific frequency exponent (`SiteContext::freq_prior`),
+    /// counted when asked, so a run shows the value reached the entries the decode reads.
+    size_t num_site_prior_entries() const {
+        size_t n = 0;
+        for (const Entry& e : entries) {
+            n += !e.retracted && e.freq_prior >= 0.0f;
+        }
+        return n;
+    }
+
 private:
 
     /// No entry. Chain terminator for `next_same_key` and the miss value of `live_index`.
@@ -790,6 +837,9 @@ private:
 
     struct Entry {
         uint32_t position = 0;
+        /// `SiteContext::freq_prior`, carried to the decode. Here because it fills the padding
+        /// before `chain_key`, so the entry -- and the retained-bytes figure -- does not grow.
+        float freq_prior = -1.0f;
         /// Identity of this snarl's chain, from its boundary pair. The group key: sibling chains
         /// have no transition between them, so a chain needs only to be distinguishable from its
         /// siblings -- which the graph answers directly, with no alignment.

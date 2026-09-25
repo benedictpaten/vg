@@ -1387,9 +1387,13 @@ public:
     /// supplied afterwards by `set_allele_map`.
     void record_site(const Snarl& snarl, const vector<SnarlTraversal>& travs,
                      const vector<int>& trav_genotype,
-                     const unique_ptr<SnarlCaller::CallInfo>& call_info,
+                     const unique_ptr<SnarlCaller::CallInfo>& call_info, int ref_trav_idx,
                      const string& ref_path_name, int ref_offset,
                      bool no_reference = false, int64_t anchor_position = 0);
+
+    /// The frequency exponent a site should decode with: `--hp-prior` at a run-length site, or -1
+    /// for the model's own. Reads the traversals' sequences only when `--hp-prior` is on.
+    double site_freq_prior(const vector<SnarlTraversal>& travs, int ref_trav_idx) const;
 
     /// Emit the records staged during the sweep, in one pass.
     ///

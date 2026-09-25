@@ -188,8 +188,8 @@ there, which normalises to `rel = 0`.
 Base-level edits are read off the mapper's alignment and bases are never re-aligned. What the walk
 chooses is the correspondence between **node visits**: which read visit pairs with which allele
 visit. The default is greedy and single-pass; `--realign` searches that correspondence space with a
-dynamic program instead of committing to the first anchor it finds. It is on under `--preset ont`
-and off otherwise. See [The two walks](#the-two-walks).
+dynamic program instead of committing to the first anchor it finds. It is off everywhere,
+`--preset ont` included. See [The two walks](#the-two-walks).
 
 This is what makes the model fast enough to score every enumerated allele exhaustively with no
 pruning and no read subsampling — the cost is roughly 10²–10³× below alignment.
@@ -1384,11 +1384,11 @@ long ALT. Repairing it therefore removes a duplicate rather than recovering a mi
 ## Long reads: `--preset ont`
 
 The short-read defaults give the wrong answer in one place at 33 kb, and `--preset ont` is the
-fitted correction. It sets seven things, and an explicit flag either side of it wins:
+fitted correction. It sets eight things, and an explicit flag either side of it wins:
 
 ```
---gap-open 1 --gap-extend 1 --mismap-min 0.05 --realign --insertion-nats 0.9 \
-    --read-phasing --regenotype
+--gap-open 1 --gap-extend 1 --mismap-min 0.05 --read-min-mapq 5 --insertion-nats 0.9 \
+    --read-phasing --regenotype --hp-prior 20
 ```
 
 **Why the gap penalties.** The read scorer's default gap-open of 6 is a substitution-era number.
@@ -1397,11 +1397,33 @@ mismap floor leaves visible, a gap of 6 makes every single-base indel difference
 whatever the base qualities say. 60% of ONT indel false positives are one homopolymer cell. Setting
 the gap penalties to 1 makes that vote proportionate.
 
-**Why `--realign`.** A long read diverges from an allele over many node visits, and a greedy
-single-pass correspondence cannot revise a pairing once made. Optimising it is worth +0.0042 indel
-F1 on chr20 and +0.0035 on chr6, held out, for +17% CPU. It is not a global default because a
-150 bp read barely diverges: short reads gain +0.0006 on both contigs for roughly three times the
-compute. See [The two walks](#the-two-walks).
+**Why not `--realign`.** The optimal walk is worth indel F1 +0.0042 on ONT chr20, all of it
+deletions, but with the snarl-edge cap off it costs 10.4x the time, because it pays per read against
+the whole of a long allele at exactly the snarls the cap used to decline. See
+[The two walks](#the-two-walks).
+
+**Why `--hp-prior 20`.** ONT miscounts long homopolymer runs in a way that belongs to the site, not
+the read, so the reads' votes there are not independent -- but the emission multiplies them as if
+they were. Their margin grows with depth while the panel's frequency prior (`--linkage-prior`) is a
+fixed number of nats, so past 10-20x the reads outvote the panel at exactly the sites where the panel
+knows better: under 5% of true heterozygous indels in runs of 11 bp or more are alleles 2 or fewer of
+18 haplotypes carry, against 45% of the false ones. Indels there were the one class whose F1 *fell*
+as depth rose. `--hp-prior` replaces the exponent with 20 at a site where the reference allele and
+another differ by the length of one run of at least `--hp-prior-run` bases (11), measured inside the
+alleles, a run that reaches into a boundary node counting as long. Everywhere else, and for every
+SNV, nothing changes.
+
+| ONT indel F1 | 20x | full depth | 20x -> full |
+|---|---|---|---|
+| chr20, before | 0.8714 | 0.8632 (43x) | -0.0082 |
+| chr20, `--hp-prior 20` | 0.8849 | 0.8892 | +0.0043 |
+| chr6 (held out), before | 0.8887 | 0.8807 (45x) | -0.0080 |
+| chr6 (held out), `--hp-prior 20` | 0.8989 | 0.9037 | +0.0048 |
+
+SNV F1 moves by at most 0.0007 at any depth from 5x to full, SV F1 by at most 0.0015 at 20x and full
+depth, and switch error on the heterozygous sites both runs genotype alike is unchanged at full
+depth. Letting the exponent rise with the site's
+reads was measured and bought +0.0016 at 43x, not significant, so it is fixed.
 
 **Why `--insertion-nats 0.9`.** ONT's basecaller miscounts homopolymer runs asymmetrically, so a
 read's extra bases are weaker evidence than its missing bases. The optimum is flat between 0.9 and
@@ -1501,6 +1523,8 @@ spellings. General options that this mode also uses -- `-d`/`--ploidy`, `-R`/`--
 | `--linkage-weight W` | 2 | Exponent tempering the switch probability. 0 is off and reproduces the per-site caller exactly. |
 | `--linkage-scale N` | 10000 | Distance scale of the linkage decay, in bp. Nearly flat from 10–40 kb. |
 | `--linkage-prior F` | 5 | Exponent on the state space's implied allele-frequency prior. 0 removes it, 1 keeps it as presented, and it inverts past ~8. |
+| `--hp-prior F` | 0; **20** under `--preset ont` | The exponent used in place of `--linkage-prior` at a site whose reference allele and another differ by the length of one homopolymer run. [Above](#long-reads---preset-ont). |
+| `--hp-prior-run N` | 11 | The shortest run, measured inside the alleles, that puts a site in scope; a run reaching into a boundary node counts as long. |
 
 ### Quality reporting — ranking only, never changes a genotype
 
@@ -1534,7 +1558,7 @@ spellings. General options that this mode also uses -- `-d`/`--ploidy`, `-R`/`--
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--preset ont` | — | `--gap-open 1 --gap-extend 1 --mismap-min 0.05 --insertion-nats 0.9 --read-phasing --regenotype`. NOT `--realign`: it costs 10.4x once `--max-snarl-edges` is off, for indel F1 +0.0042 that is all deletions. An explicit flag either side of it wins. [Above](#long-reads---preset-ont). |
+| `--preset ont` | — | `--gap-open 1 --gap-extend 1 --mismap-min 0.05 --read-min-mapq 5 --insertion-nats 0.9 --read-phasing --regenotype --hp-prior 20`. NOT `--realign`: it costs 10.4x once `--max-snarl-edges` is off, for indel F1 +0.0042 that is all deletions. An explicit flag either side of it wins. [Above](#long-reads---preset-ont). |
 | `--gap-open N` | 6 | Read scorer's gap-open penalty. The default is a substitution-era number; 1 is right where the modal error is a homopolymer indel. |
 | `--gap-extend N` | 1 | Read scorer's gap-extension penalty. |
 

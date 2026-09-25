@@ -463,6 +463,14 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
     }
     for (size_t t = n; t-- > 0;) {
         const Site& site = sites[from + t];
+        // A site's own exponent is bounded so that mass * multiplicity^(f - 1), with mass <= 1 and
+        // multiplicity <= n_hap^2, stays under e^690 and sums over genotypes cannot overflow --
+        // f 122 on 18 haplotypes, 60 on about 400.
+        const double freq_prior =
+            site.freq_prior >= 0.0
+                ? std::min(site.freq_prior,
+                           1.0 + 690.0 / std::log(std::max(4.0, (double)n_hap * (double)n_hap)))
+                : params.freq_prior;
         vector<double>& post = out[from + t];
         post.assign(site.genotype_ln_likelihood.size(), 0.0);
         vector<size_t> multiplicity(site.genotype_ln_likelihood.size(), 0);
@@ -526,7 +534,7 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
                         // every value above 1 behave as 1, silently. Above 1 the exponent goes
                         // negative and the prior is amplified past the state space's own
                         // multiplicity, which is a real setting and was unreachable.
-                        share /= pow((double)carriers[k], 1.0 - params.freq_prior);
+                        share /= pow((double)carriers[k], 1.0 - freq_prior);
                     }
                     for (size_t other = 0; other < n_alleles; ++other) {
                         size_t idx = genotype_index(k, other);
@@ -561,7 +569,7 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
             if (multiplicity[idx] > 1) {
                 // See the note on the carriers guard above: `freq_prior < 1` here silently
                 // clamped every larger value to 1.
-                k /= pow((double)multiplicity[idx], 1.0 - params.freq_prior);
+                k /= pow((double)multiplicity[idx], 1.0 - freq_prior);
             }
             post[idx] = k + wild[idx];
             total += post[idx];
@@ -1045,6 +1053,7 @@ void LinkageModel::window_haploid_posteriors(const vector<Site>& sites, size_t f
     vector<double> beta(m, 1.0);
     for (size_t t = n; t-- > 0;) {
         const Site& site = sites[from + t];
+        const double freq_prior = site.freq_prior >= 0.0 ? site.freq_prior : params.freq_prior;
         vector<double>& post = out[from + t];
         post.assign(site.num_alleles, 0.0);
 
@@ -1085,7 +1094,7 @@ void LinkageModel::window_haploid_posteriors(const vector<Site>& sites, size_t f
         for (size_t k = 0; k < site.num_alleles; ++k) {
             double v = known[k];
             if (carriers[k] > 1) {
-                v /= pow((double)carriers[k], 1.0 - params.freq_prior);
+                v /= pow((double)carriers[k], 1.0 - freq_prior);
             }
             post[k] = v + wild[k];
             total += post[k];
@@ -1358,6 +1367,59 @@ LinkageCollector::CompactSite LinkageCollector::compact_site(
     return cs;
 }
 
+bool LinkageModel::run_length_site(const vector<string>& alleles, size_t min_run, size_t ref) {
+    for (size_t x = 0; x < alleles.size(); ++x) {
+        for (size_t y = 0; y < alleles.size(); ++y) {
+            if (ref < alleles.size() && x != ref && y != ref) {
+                continue;
+            }
+            // `a` the longer of the pair; one ordering suffices, the other is its mirror.
+            const string& a = alleles[x];
+            const string& b = alleles[y];
+            if (a.size() <= b.size() || a.size() - b.size() > 49) {
+                continue;
+            }
+            size_t pre = 0;
+            while (pre < b.size() && a[pre] == b[pre]) {
+                ++pre;
+            }
+            size_t suf = 0;
+            while (suf < b.size() - pre && a[a.size() - 1 - suf] == b[b.size() - 1 - suf]) {
+                ++suf;
+            }
+            // What `a` has and `b` lacks, once the shared flanks are gone.
+            const size_t lo = pre;
+            const size_t hi = a.size() - suf;
+            if (pre + suf != b.size()) {
+                continue;  // they differ by more than an insertion
+            }
+            const char base = a[lo];
+            bool one_base = true;
+            for (size_t i = lo; i < hi && one_base; ++i) {
+                one_base = a[i] == base;
+            }
+            if (!one_base) {
+                continue;
+            }
+            // The run the extra bases sit in, measured in the longer allele.
+            size_t start = lo;
+            while (start > 0 && a[start - 1] == base) {
+                --start;
+            }
+            size_t end = hi;
+            while (end < a.size() && a[end] == base) {
+                ++end;
+            }
+            // Reaching an end of the allele means the run continues into a boundary node made of
+            // this base, where the graph cut it: its length is unknown, so it counts as long.
+            if (end - start >= min_run || start == 0 || end == a.size()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void LinkageCollector::record(const string& contig, size_t position,
                               const map<vector<int>, double>& genotype_ln_likelihood,
                               const vector<int>& haplotype_traversal,
@@ -1417,6 +1479,7 @@ void LinkageCollector::record(const string& contig, size_t position,
     e.unpositioned = ctx.unpositioned;
     e.chain_key = ctx.chain_key;
     e.generation = (uint8_t)(ctx.generation > 255 ? 255 : ctx.generation);
+    e.freq_prior = (float)ctx.freq_prior;
 
     e.gl_offset = (uint32_t)gl_arena.size();
     for (float v : gls) {
@@ -2256,6 +2319,7 @@ size_t LinkageCollector::resolve_generation(
             s.unpositioned = e.unpositioned;
             s.num_alleles = e.num_alleles;
             s.ploidy = e.ploidy;
+            s.freq_prior = e.freq_prior;
             size_t n_gt = e.ploidy == 1
                               ? (size_t)e.num_alleles
                               : (size_t)e.num_alleles * ((size_t)e.num_alleles + 1) / 2;

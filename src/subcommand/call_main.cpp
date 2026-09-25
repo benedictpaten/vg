@@ -159,7 +159,8 @@ void help_call(char** argv) {
          << "                            default, so the values below are short-read ones." << endl
          << "                            `ont`: --gap-open 1 --gap-extend 1 --mismap-min" << endl
          << "                            0.05 --insertion-nats 0.9 --read-phasing" << endl
-         << "                            --regenotype. NOT --realign: see there. The scorer" << endl
+         << "                            plus --regenotype --hp-prior 20. NOT --realign:" << endl
+         << "                            see there. The scorer" << endl
          << "                            values" << endl
          << "                            move indel GT F1 0.749 -> 0.816 and ALL 0.926 ->" << endl
          << "                            0.945 on 43x ONT chr20 at no cost to SNVs," << endl
@@ -389,6 +390,13 @@ void help_call(char** argv) {
          << "                            and above 1 amplifies it; measured best near 5 on a" << endl
          << "                            34- haplotype panel, inverting past 8. Mostly an" << endl
          << "                            indel effect [5]" << endl
+         << "      --hp-prior F          at a site whose alleles differ by the length of one" << endl
+         << "                            homopolymer run, use exponent F in place of" << endl
+         << "                            --linkage-prior. Long reads miscount long runs per" << endl
+         << "                            site, not per read, so their evidence there must" << endl
+         << "                            not outvote the panel as depth grows. 0 is off" << endl
+         << "                            [0, or 20 under --preset ont]" << endl
+         << "      --hp-prior-run N      shortest run, within the alleles, that counts [11]" << endl
          << "" << endl
          << "  quality reporting (ranking only; these never change a genotype):" << endl
          << "      --no-share-quality    report GQ as the raw likelihood ratio, without" << endl
@@ -698,6 +706,9 @@ int main_call(int argc, char** argv) {
     bool linkage_weight_explicit = false;
     double linkage_scale = 10000.0;
     double linkage_freq_prior = 5.0;
+    double hp_prior = 0.0;
+    bool hp_prior_explicit = false;
+    int hp_prior_run = 11;
     bool flat_mixture = false;
     double depth_weight = 0.1;
     bool depth_count_raw = false;
@@ -757,6 +768,8 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_NO_SHARE_QUALITY = 1021;
     constexpr int OPT_FLAT_MIXTURE = 1023;
     constexpr int OPT_MAX_SNARL_EDGES = 1109;
+    constexpr int OPT_HP_PRIOR = 1110;
+    constexpr int OPT_HP_PRIOR_RUN = 1111;
     constexpr int OPT_DEPTH_TERM = 1025;
     constexpr int OPT_DEPTH_COUNT_RAW = 1026;
     constexpr int OPT_DEPTH_QUALITY = 1027;
@@ -925,6 +938,8 @@ int main_call(int argc, char** argv) {
         {"linkage-weight", required_argument, 0, OPT_LINKAGE_WEIGHT,        OWN_READ_LIKELIHOOD},
         {"linkage-scale", required_argument, 0, OPT_LINKAGE_SCALE,          OWN_READ_LIKELIHOOD},
         {"linkage-prior", required_argument, 0, OPT_LINKAGE_FREQ_PRIOR,     OWN_READ_LIKELIHOOD},
+        {"hp-prior", required_argument, 0, OPT_HP_PRIOR,                    OWN_READ_LIKELIHOOD},
+        {"hp-prior-run", required_argument, 0, OPT_HP_PRIOR_RUN,            OWN_READ_LIKELIHOOD},
         {"enumerate-support", no_argument, 0, OPT_ENUMERATE_SUPPORT,        OWN_READ_LIKELIHOOD},
         {"phased", no_argument, 0, OPT_PHASED,                              OWN_READ_LIKELIHOOD},
         {"mosaic-out", required_argument, 0, OPT_MOSAIC_OUT,                OWN_READ_LIKELIHOOD},
@@ -1325,6 +1340,13 @@ int main_call(int argc, char** argv) {
         case OPT_LINKAGE_FREQ_PRIOR:
             linkage_freq_prior = parse<double>(optarg);
             break;
+        case OPT_HP_PRIOR:
+            hp_prior = parse<double>(optarg);
+            hp_prior_explicit = true;
+            break;
+        case OPT_HP_PRIOR_RUN:
+            hp_prior_run = parse<int>(optarg);
+            break;
         case OPT_NO_SHARE_QUALITY:
             no_share_quality = true;
             break;
@@ -1493,6 +1515,11 @@ int main_call(int argc, char** argv) {
     //
     // Checked here rather than after the graph is loaded, because these are option-compatibility
     // facts and making a user wait for a 22 GB load to be told the combination is invalid is waste.
+    if (hp_prior < 0.0 || hp_prior_run < 1) {
+        cerr << "error [vg call]: --hp-prior takes a value >= 0, and --hp-prior-run a run of at least 1"
+             << endl;
+        return 1;
+    }
     if (!preset.empty()) {
         // Applied after the option loop, so an explicit flag wins wherever it is written.
         //
@@ -1574,6 +1601,19 @@ int main_call(int argc, char** argv) {
                 // Not a global default: it is fitted on a long-read error mode, and 150 bp reads
                 // are unmeasured at any non-zero value.
                 insertion_gap_nats = 0.9;
+            }
+            if (!hp_prior_explicit) {
+                // ONT miscounts long homopolymer runs in a way that belongs to the site, so at
+                // those sites the reads' margin grows with depth while the frequency prior stays
+                // fixed, and past 10-20x the reads outvote a panel that had the better answer --
+                // indels in runs of 11 bp or more were the one class whose F1 fell with depth.
+                //
+                // Fitted on chr20 across 5x-43x: 20 is best at every depth to 25x and within 0.0025
+                // of the best above it, and letting it rise with the site's reads bought +0.0016 at
+                // 43x, not significant, so it stays fixed. chr6, held out: indel F1 +0.023 at 45x
+                // (+0.010 at 20x), SNV and SV unmoved, and the 20x -> full indel slope goes from
+                // -0.008 to +0.005. See Params::hp_prior.
+                hp_prior = 20.0;
             }
             // The preset leaves the read-to-allele correspondence GREEDY. `--realign` resolves
             // it by DP instead of in one left-to-right pass, and it used to be set here: on ONT
@@ -3225,6 +3265,8 @@ int main_call(int argc, char** argv) {
                 linkage_params.weight = linkage_weight;
                 linkage_params.scale = linkage_scale;
                 linkage_params.freq_prior = linkage_freq_prior;
+                linkage_params.hp_prior = hp_prior;
+                linkage_params.hp_prior_run = (size_t)hp_prior_run;
                 linkage_collector.reset(new LinkageCollector(linkage_params, hap_index.size()));
                 vcf_caller->set_linkage(linkage_collector.get(), gbwt_index,
                                         &linkage_sequence_to_haplotype);
