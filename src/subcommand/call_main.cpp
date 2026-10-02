@@ -329,6 +329,9 @@ void help_call(char** argv) {
          << "      --repeat-descent      at a repeat site, genotype the snarls nested in its" << endl
          << "                            whole-walk alleles, as nested calling does at other" << endl
          << "                            sites (experimental)" << endl
+         << "      --repeat-linkage      make no repeat sites: call the snarls of each repeat" << endl
+         << "                            region as usual, and let the linkage model switch" << endl
+         << "                            panel haplotypes nowhere between them (experimental)" << endl
          << "  -L, --cluster F           merge called alt alleles whose length-weighted" << endl
          << "                            similarity is >= F, so 1/2 of two effectively" << endl
          << "                            identical alleles becomes 1/1 [1.0; experimental]" << endl
@@ -393,6 +396,7 @@ int main_call(int argc, char** argv) {
     string ploidy_bed_filename;
     string repeat_sites_filename;
     bool repeat_descent = false;
+    bool repeat_linkage = false;
 
     bool traversals_only = false;
     bool gaf_output = false;
@@ -557,6 +561,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_PLOIDY_BED = 1043;
     constexpr int OPT_REPEAT_SITES = 1112;
     constexpr int OPT_REPEAT_DESCENT = 1113;
+    constexpr int OPT_REPEAT_LINKAGE = 1114;
     constexpr int OPT_NESTED = 1044;
     constexpr int OPT_NO_NESTED = 1045;
     constexpr int OPT_NO_OFF_REF_NESTING = 1101;
@@ -614,6 +619,7 @@ int main_call(int argc, char** argv) {
             {"ploidy-bed", required_argument, 0, OPT_PLOIDY_BED},
             {"repeat-sites", required_argument, 0, OPT_REPEAT_SITES},
             {"repeat-descent", no_argument, 0, OPT_REPEAT_DESCENT},
+            {"repeat-linkage", no_argument, 0, OPT_REPEAT_LINKAGE},
             {"nested", no_argument, 0, OPT_NESTED},
             {"no-nested", no_argument, 0, OPT_NO_NESTED},
             {"gaf", no_argument, 0, 'G'},
@@ -1064,6 +1070,9 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_REPEAT_DESCENT:
             repeat_descent = true;
+            break;
+        case OPT_REPEAT_LINKAGE:
+            repeat_linkage = true;
             break;
         case OPT_NESTED:
             nested_calling = true;
@@ -2443,20 +2452,6 @@ int main_call(int argc, char** argv) {
         ploidy_target->set_ploidy_regions(ploidy_bed_filename);
     }
 
-    // Repeat sites, each genotyped as one site of whole panel walks.
-    if (!repeat_sites_filename.empty()) {
-        FlowCaller* repeat_caller = dynamic_cast<FlowCaller*>(graph_caller.get());
-        if (!read_likelihood || !gbwt_enumeration || repeat_caller == nullptr) {
-            logger.error() << "--repeat-sites needs --read-likelihood with a GBZ or GBWT panel, "
-                           << "whose haplotypes give each site its whole-walk alleles" << endl;
-        }
-        if (call_chains) {
-            logger.error() << "--repeat-sites cannot be combined with -I/--chains" << endl;
-        }
-        repeat_caller->set_repeat_sites(repeat_sites_filename, repeat_descent);
-    } else if (repeat_descent) {
-        logger.error() << "--repeat-descent needs --repeat-sites" << endl;
-    }
 
     // Nested calling: a called traversal that takes the reference's route through a snarl,
     // differing only inside nested snarls, is called as the reference allele, and the differences
@@ -2831,6 +2826,27 @@ int main_call(int argc, char** argv) {
         if (deferring_caller != nullptr) {
             deferring_caller->set_stage_records(true);
         }
+    }
+
+    // Repeat sites, each genotyped as one site of whole panel walks, or with --repeat-linkage only
+    // decoded without a switch between their sites. After the linkage model is set, which
+    // --repeat-linkage needs.
+    if (!repeat_sites_filename.empty()) {
+        FlowCaller* repeat_caller = dynamic_cast<FlowCaller*>(graph_caller.get());
+        if (!read_likelihood || !gbwt_enumeration || repeat_caller == nullptr) {
+            logger.error() << "--repeat-sites needs --read-likelihood with a GBZ or GBWT panel, "
+                           << "whose haplotypes give each site its whole-walk alleles" << endl;
+        }
+        if (call_chains) {
+            logger.error() << "--repeat-sites cannot be combined with -I/--chains" << endl;
+        }
+        if (repeat_linkage && repeat_descent) {
+            logger.error() << "--repeat-descent applies to repeat sites, which --repeat-linkage does "
+                           << "not make" << endl;
+        }
+        repeat_caller->set_repeat_sites(repeat_sites_filename, repeat_descent, repeat_linkage);
+    } else if (repeat_descent || repeat_linkage) {
+        logger.error() << "--repeat-descent and --repeat-linkage need --repeat-sites" << endl;
     }
 
     if (!call_chains) {

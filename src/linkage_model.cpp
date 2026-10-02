@@ -32,16 +32,26 @@ static inline size_t position_gap(size_t prev, bool prev_unpositioned, bool prev
     return next > prev ? next - prev : 1;
 }
 
+/// The gap `site_gap` gives between two consecutive sites of one repeat region, which
+/// `switch_probability` reads as `Params::repeat_rho` whatever the sites' distance.
+static constexpr size_t REPEAT_GAP = numeric_limits<size_t>::max() - 1;
+
 /// `position_gap` between two adjacent sites of a chain, once for each strand, since
 /// `transition_apply` takes a switch probability per strand; the two are always equal.
 static inline std::pair<size_t, size_t> site_gap(const LinkageModel::Site& prev,
                                                 const LinkageModel::Site& next) {
+    if (prev.repeat >= 0 && prev.repeat == next.repeat) {
+        return {REPEAT_GAP, REPEAT_GAP};
+    }
     const size_t d = position_gap(prev.position, prev.unpositioned, prev.group_parent,
                                   next.position, next.unpositioned);
     return {d, d};
 }
 
 double LinkageModel::switch_probability(size_t gap) const {
+    if (gap == REPEAT_GAP) {
+        return params.weight <= 0.0 ? 1.0 : params.repeat_rho;
+    }
     if (gap < 1) {
         gap = 1;
     }
@@ -1370,6 +1380,12 @@ void LinkageCollector::record(const string& contig, size_t position,
 
     Entry e;
     e.position = (uint32_t)position;
+    {
+        auto rr = repeat_region_of_key.find(record_key);
+        if (rr != repeat_region_of_key.end()) {
+            e.repeat = rr->second;
+        }
+    }
     e.contig = contig_id;
     e.num_alleles = (uint16_t)k;
     e.called_i = (uint16_t)ci;
@@ -2033,6 +2049,7 @@ size_t LinkageCollector::resolve_level(
             const Entry& e = entries[idx];
             LinkageModel::Site s;
             s.position = e.position;
+            s.repeat = e.repeat;
             s.unpositioned = e.unpositioned;
             s.num_alleles = e.num_alleles;
             s.ploidy = e.ploidy;

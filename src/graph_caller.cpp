@@ -5509,7 +5509,7 @@ bool FlowCaller::snarl_is_leaf(const Snarl& snarl) const {
     }
 }
 
-void FlowCaller::set_repeat_sites(const string& bed_path, bool descent) {
+void FlowCaller::set_repeat_sites(const string& bed_path, bool descent, bool linkage_only) {
     repeat_descent = descent;
     // The regions, by contig as the VCF spells it, each sorted by start. They may not overlap.
     struct Region {
@@ -5609,7 +5609,8 @@ void FlowCaller::set_repeat_sites(const string& bed_path, bool descent) {
     });
 
     // One site per region whose snarls are consecutive links of one top-level chain.
-    size_t n_regions = 0, n_empty = 0, n_split = 0;
+    size_t n_regions = 0, n_empty = 0, n_split = 0, n_linkage_regions = 0, n_linkage_snarls = 0;
+    unordered_map<size_t, int32_t> linkage_region_of_key;
     for (auto& kv : regions) {
         n_regions += kv.second.size();
     }
@@ -5649,6 +5650,19 @@ void FlowCaller::set_repeat_sites(const string& bed_path, bool descent) {
             ++n_split;
             continue;
         }
+        if (linkage_only) {
+            // Each covered snarl's record key, in both orientations, since the caller records a
+            // snarl flipped where the reference runs backward through it.
+            const int32_t region = (int32_t)n_linkage_regions++;
+            for (const Snarl* snarl : site.covered) {
+                Snarl flipped = *snarl;
+                flip_snarl(flipped);
+                linkage_region_of_key[record_key_of(*snarl)] = region;
+                linkage_region_of_key[record_key_of(flipped)] = region;
+                ++n_linkage_snarls;
+            }
+            continue;
+        }
         for (const Snarl* snarl : site.covered) {
             repeat_covered.insert(snarl);
         }
@@ -5659,6 +5673,18 @@ void FlowCaller::set_repeat_sites(const string& bed_path, bool descent) {
         repeat_sites.push_back(std::move(site));
     }
     n_empty = n_regions - inside.size();
+    if (linkage_only) {
+        if (linkage_collector == nullptr) {
+            cerr << "error [vg call]: --repeat-linkage needs the linkage model" << endl;
+            exit(1);
+        }
+        linkage_collector->set_repeat_regions(std::move(linkage_region_of_key));
+        cerr << "[vg call] repeat linkage: " << n_linkage_regions << " of " << n_regions
+             << " regions, over " << n_linkage_snarls << " top-level snarls, decoded with no switch"
+             << " between their sites; " << n_empty << " regions hold no top-level snarl on the"
+             << " reference and " << n_split << " span more than one chain" << endl;
+        return;
+    }
     cerr << "[vg call] repeat sites: " << repeat_sites.size() << " of " << n_regions
          << " regions, covering " << repeat_covered.size() << " top-level snarls; " << n_empty
          << " regions hold no top-level snarl on the reference and " << n_split
