@@ -9,7 +9,7 @@ PATH=../bin:$PATH # for vg
 # FORMAT field shifts every later one, which broke four assertions here that were not
 # testing field order at all -- one of them silently compared BL against a GQ threshold.
 
-plan tests 453
+plan tests 463
 
 # Toy example of hand-made pileup (and hand inspected truth) to make sure some
 # obvious (and only obvious) SNPs are detected by vg call
@@ -2957,3 +2957,68 @@ is $(grep -v "^#" island_call.vcf | grep -c "RC=chr1_1_alt") 0 "call: no record 
 
 rm -f island_call.pg island_call.gam island_call.pack island_call.vcf
 
+
+# Repeat sites (--repeat-sites): a BED region genotyped as one site whose alleles are the panel
+# haplotypes' whole walks across it. Three adjacent bubbles, a SNP (nodes 2/3), an insertion (5/6)
+# and a SNP (8/9), and a region covering the first two. The sample is p1: A with the insertion on
+# one haplotype, T without it on the other. p2 and p3 carry the other two combinations, so phasing
+# the two bubbles separately from the panel can pair them wrongly; the repeat site cannot, since
+# its alleles are whole walks. vg sim leaves MAPQ 0, which would make every read look mismapped, so
+# the reads are given MAPQ 60.
+rm -f rpt.gfa rpt.gbz rpt.gam rpt.bed rpt_plain.vcf rpt_site.vcf rpt_site.err rpt_none.vcf rpt_none.err
+{
+  printf 'H\tVN:Z:1.1\n'
+  printf 'S\t1\tCCTAGGCTTAGGACCTGATCGGATCCAGTA\n'
+  printf 'S\t2\tA\nS\t3\tT\n'
+  printf 'S\t4\tGGCATTAGCCTTAGACCGAT\n'
+  printf 'S\t5\tG\nS\t6\tGACGACGACGACGACGACGA\n'
+  printf 'S\t7\tTTGACCAGTTCAGGACTTAC\n'
+  printf 'S\t8\tC\nS\t9\tG\n'
+  printf 'S\t10\tGATCCATGCAAGTCGTACGATGCAAGCTTG\n'
+  printf 'L\t1\t+\t2\t+\t0M\nL\t1\t+\t3\t+\t0M\nL\t2\t+\t4\t+\t0M\nL\t3\t+\t4\t+\t0M\n'
+  printf 'L\t4\t+\t5\t+\t0M\nL\t4\t+\t6\t+\t0M\nL\t5\t+\t7\t+\t0M\nL\t6\t+\t7\t+\t0M\n'
+  printf 'L\t7\t+\t8\t+\t0M\nL\t7\t+\t9\t+\t0M\nL\t8\t+\t10\t+\t0M\nL\t9\t+\t10\t+\t0M\n'
+  printf 'P\tGRCh#0#chr1\t1+,2+,4+,5+,7+,8+,10+\t*\n'
+  printf 'W\tp1\t0\tchr1\t0\t139\t>1>2>4>6>7>8>10\n'
+  printf 'W\tp1\t1\tchr1\t0\t120\t>1>3>4>5>7>9>10\n'
+  printf 'W\tp2\t0\tchr1\t0\t139\t>1>3>4>6>7>8>10\n'
+  printf 'W\tp2\t1\tchr1\t0\t120\t>1>2>4>5>7>9>10\n'
+  printf 'W\tp3\t0\tchr1\t0\t120\t>1>2>4>5>7>8>10\n'
+  printf 'W\tp3\t1\tchr1\t0\t139\t>1>3>4>6>7>9>10\n'
+} > rpt.gfa
+vg gbwt -G rpt.gfa --gbz-format -g rpt.gbz --set-reference GRCh 2>/dev/null
+{ vg sim -x rpt.gbz -n 300 -l 40 -a -s 31 --path "p1#0#chr1#0"; vg sim -x rpt.gbz -n 300 -l 40 -a -s 37 --path "p1#1#chr1#0"; } 2>/dev/null \
+  | vg view -aj - | jq -c '.mapping_quality = 60' | vg view -JaG - > rpt.gam
+printf 'chr1\t0\t72\n' > rpt.bed
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased > rpt_plain.vcf 2>/dev/null
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-sites rpt.bed --progress \
+    > rpt_site.vcf 2> rpt_site.err
+is "$?" "0" "call: --repeat-sites runs"
+is $(grep -c "repeat sites: 1 of 1 regions, covering 2 top-level snarls" rpt_site.err) "1" \
+   "call: the region becomes one repeat site over the two snarls inside it"
+is $(grep -v "^#" rpt_site.vcf | awk -F'\t' '$3 == ">1>4" || $3 == ">4>7"' | wc -l | tr -d ' ') "0" \
+   "call: the snarls a repeat site covers get no records of their own"
+is $(grep -v "^#" rpt_site.vcf | awk -F'\t' '$3 ~ /^>1>7_[0-9]+$/' | wc -l | tr -d ' ') "2" \
+   "call: the repeat site writes one block record per difference, each with an ID of its own"
+is $(grep -v "^#" rpt_site.vcf | awk -F'\t' '$3 == ">7>10"' | wc -l | tr -d ' ') "1" \
+   "call: a snarl outside the region is called as usual"
+# The strand carrying T at the SNP must not carry the insertion: the sample's walks are A with the
+# insertion and T without it.
+is $(grep -v "^#" rpt_site.vcf | awk -F'\t' '$3 ~ /^>1>7_/ {split($10, f, ":"); split(f[1], g, "|"); gt[$2] = g[1] "" g[2]}
+     END {t = (substr(gt[31], 1, 1) == "1") ? 1 : 2; print (substr(gt[52], t, 1) == "0") ? "walks" : "stitched"}') "walks" \
+   "call: the repeat site's strands are whole panel walks"
+# A region holding no snarl wholly inside it is called as usual.
+printf 'chr1\t35\t60\n' > rpt.bed
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-sites rpt.bed --progress \
+    > rpt_none.vcf 2> rpt_none.err
+is $(grep -c "repeat sites: 0 of 1 regions" rpt_none.err) "1" "call: a region holding no whole snarl makes no repeat site"
+cmp rpt_plain.vcf rpt_none.vcf > /dev/null
+is "$?" "0" "call: and the output is the same as without --repeat-sites"
+printf 'chr1\t0\t72\n' > rpt.bed
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-sites rpt.bed --anchors-out rpt_anch.tsv \
+    > /dev/null 2>&1
+is "$?" "0" "call: repeat sites run with --anchors-out, which writes nesting tags"
+vg call rpt.gbz --gam rpt.gam -t 1 -s samp --repeat-sites rpt.bed > /dev/null 2>&1
+is "$?" "1" "call: --repeat-sites needs --read-likelihood"
+
+rm -f rpt.gfa rpt.gbz rpt.gam rpt.bed rpt_plain.vcf rpt_site.vcf rpt_site.err rpt_none.vcf rpt_none.err rpt_anch.tsv

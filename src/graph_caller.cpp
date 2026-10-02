@@ -193,6 +193,10 @@ void GraphCaller::call_top_level_snarls(const HandleGraph& graph, RecurseType re
     // Run the snarl caller on a snarl, and queue up the children if it fails
     auto process_snarl = [&](const Snarl* snarl) {
 
+        if (top_level && repeat_covered.count(snarl)) {
+            // A repeat site genotypes it, below.
+            return;
+        }
         if (!snarl_manager.is_trivial(snarl, graph)) {
 
 #ifdef debug
@@ -259,6 +263,35 @@ void GraphCaller::call_top_level_snarls(const HandleGraph& graph, RecurseType re
         snarl_manager.for_each_top_level_snarl_parallel(process_snarl);
     }
     if (show_progress) cerr << "[vg call]: Finished processing " << top_snarl_count << " top-level snarls" << endl;
+
+    // Repeat sites, called directly rather than through process_snarl, whose snarl-manager queries
+    // are valid only for snarls the manager owns. A site that cannot be called puts its covered
+    // snarls on the queue, so that they are called as usual.
+    if (!repeat_sites.empty()) {
+        vector<size_t> order(repeat_sites.size());
+        for (size_t i = 0; i < order.size(); ++i) {
+            order[i] = i;
+        }
+        if (node_id_ordering) {
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+                return snarl_node_key(&repeat_sites[a].site) < snarl_node_key(&repeat_sites[b].site);
+            });
+        }
+        std::atomic<size_t> repeat_failed(0);
+#pragma omp parallel for schedule(dynamic, 1)
+        for (int i = 0; i < (int)order.size(); ++i) {
+            const RepeatSite& rs = repeat_sites[order[i]];
+            if (!call_snarl(rs.site)) {
+                ++repeat_failed;
+                vector<const Snarl*>& thread_queue = snarl_queue[omp_get_thread_num()];
+                thread_queue.insert(thread_queue.end(), rs.covered.begin(), rs.covered.end());
+            }
+        }
+        if (show_progress) {
+            cerr << "[vg call]: repeat sites: " << repeat_sites.size() << " called, " << repeat_failed
+                 << " of them could not be and their snarls are called separately" << endl;
+        }
+    }
 
     top_level = false;
 
@@ -2837,6 +2870,12 @@ bool VCFOutputCaller::is_symbolically_reference(const vector<SnarlTraversal>& ca
         trav_idx >= (int)called_traversals.size()) {
         return false;
     }
+    if (is_repeat_site(snarl)) {
+        // Nothing inside a repeat site is reported separately, so only the same walk is the
+        // reference.
+        return symbolic_allele(called_traversals[trav_idx], snarl, *symbolic_manager, nullptr, true) ==
+               symbolic_allele(called_traversals[ref_trav_idx], snarl, *symbolic_manager, nullptr, true);
+    }
     return symbolically_equal(called_traversals[trav_idx], called_traversals[ref_trav_idx],
                               snarl, *symbolic_manager);
 }
@@ -2898,7 +2937,9 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         ++atomize_counters.refuse[1];
         return -1;
     }
-    if (!symbolic_site_resolvable(snarl, *symbolic_manager)) {
+    // A repeat site is cut as plain node walks, since nothing inside it is reported separately.
+    const bool plain = is_repeat_site(snarl);
+    if (!plain && !symbolic_site_resolvable(snarl, *symbolic_manager)) {
         // The projection would see no child chains here.
         ++atomize_counters.refuse[2];
         return -1;
@@ -2906,7 +2947,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
 
     const SnarlTraversal& ref_trav = called_traversals[ref_trav_idx];
     vector<pair<int, int>> ref_ranges;
-    SymbolicAllele sref = symbolic_allele(ref_trav, snarl, *symbolic_manager, &ref_ranges);
+    SymbolicAllele sref = symbolic_allele(ref_trav, snarl, *symbolic_manager, &ref_ranges, plain);
     const size_t m = sref.size();
     if (m == 0 || ref_ranges.size() != m) {
         ++atomize_counters.refuse[3];
@@ -2961,7 +3002,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
             continue;   // the reference itself: every step matches, so no blocks
         }
         haps[s].sym = symbolic_allele(called_traversals[genotype[s]], snarl, *symbolic_manager,
-                                      &haps[s].ranges);
+                                      &haps[s].ranges, plain);
         haps[s].blocks = symbolic_diff(sref, haps[s].sym, &haps[s].alt_before_ref);
         if (haps[s].alt_before_ref.size() != m + 1) {
             ++atomize_counters.refuse[4];
@@ -4247,7 +4288,14 @@ void VCFOutputCaller::update_nesting_info_tags(const SnarlManager* snarl_manager
         // chrom_index is complete after pass 1, so this lookup always hits.
         uint32_t my_chrom_id = chrom_index.at(my_chrom);
         uint32_t prev_chrom_id = my_chrom_id;
-        const Snarl* snarl = name_to_snarl.at(name);
+        auto named = name_to_snarl.find(name);
+        if (named == name_to_snarl.end()) {
+            // Not a snarl the tree holds, as a repeat site (--repeat-sites) is not: it has no
+            // enclosing site, so it is top-level, as is_top_level treats it.
+            return make_tuple(contig_level, contig_hops, parent_name, top_level_name, ref_chrom_name,
+                              suppressed_name);
+        }
+        const Snarl* snarl = named->second;
 
         assert(snarl != nullptr);
         // walk up the snarl tree
@@ -5432,6 +5480,10 @@ double FlowCaller::site_freq_prior(const vector<SnarlTraversal>& travs, int ref_
 }
 
 bool FlowCaller::snarl_is_leaf(const Snarl& snarl) const {
+    if (is_repeat_site(snarl)) {
+        // Nothing inside a repeat site is genotyped on its own.
+        return true;
+    }
     // Through `manage`, not the address of this Snarl. `SnarlManager::record` casts a Snarl* to its
     // record, which is valid only for a Snarl the manager owns, and the Snarls here are copies.
     // `manage` throws for a snarl the manager does not own, as a nested chain reached by recursion
@@ -5443,6 +5495,159 @@ bool FlowCaller::snarl_is_leaf(const Snarl& snarl) const {
         // No answer, so treat it as a leaf rather than drop the site.
         return true;
     }
+}
+
+void FlowCaller::set_repeat_sites(const string& bed_path) {
+    // The regions, by contig as the VCF spells it, each sorted by start. They may not overlap.
+    struct Region {
+        size_t start, end;
+    };
+    unordered_map<string, vector<Region>> regions;
+    ifstream in(bed_path);
+    if (!in) {
+        cerr << "error [vg call]: could not open --repeat-sites file " << bed_path << endl;
+        exit(1);
+    }
+    string line;
+    size_t line_number = 0;
+    while (getline(in, line)) {
+        ++line_number;
+        if (line.empty() || line[0] == '#' || line.compare(0, 5, "track") == 0 ||
+            line.compare(0, 7, "browser") == 0) {
+            continue;
+        }
+        istringstream ss(line);
+        string chrom;
+        long long start = -1, end = -1;
+        if (!(ss >> chrom >> start >> end) || start < 0 || end <= start) {
+            cerr << "error [vg call]: --repeat-sites " << bed_path << " line " << line_number
+                 << " is not CHROM START END with START < END: " << line << endl;
+            exit(1);
+        }
+        regions[chrom].push_back({(size_t)start, (size_t)end});
+    }
+    for (auto& kv : regions) {
+        std::sort(kv.second.begin(), kv.second.end(),
+                  [](const Region& a, const Region& b) { return a.start < b.start; });
+        for (size_t i = 1; i < kv.second.size(); ++i) {
+            if (kv.second[i].start < kv.second[i - 1].end) {
+                cerr << "error [vg call]: --repeat-sites " << bed_path << " has overlapping regions on "
+                     << kv.first << " at " << kv.second[i].start << endl;
+                exit(1);
+            }
+        }
+    }
+
+    // The reference paths of those contigs, each with the offset of its subrange, so that a node's
+    // position is in the coordinates the BED uses (those of POS, 0-based), as for --ploidy-bed.
+    unordered_map<path_handle_t, pair<string, size_t>> ref_info;
+    for (const string& name : ref_paths) {
+        if (!graph.has_path(name)) {
+            continue;
+        }
+        subrange_t subrange;
+        string contig = Paths::strip_subrange(name, &subrange);
+        string locus = PathMetadata::parse_locus_name(contig);
+        if (locus != PathMetadata::NO_LOCUS_NAME) {
+            contig = locus;
+        }
+        if (regions.count(contig)) {
+            size_t offset = subrange == PathMetadata::NO_SUBRANGE ? 0 : (size_t)subrange.first;
+            ref_info[graph.get_path_handle(name)] = make_pair(contig, offset);
+        }
+    }
+    // A node's position on one of those paths. A node the reference visits more than once has no
+    // single position, so it places nothing.
+    auto ref_pos = [&](nid_t id, string& contig, size_t& pos) -> bool {
+        size_t found = 0;
+        graph.for_each_step_on_handle(graph.get_handle(id), [&](const step_handle_t& step) {
+            auto it = ref_info.find(graph.get_path_handle_of_step(step));
+            if (it != ref_info.end()) {
+                ++found;
+                contig = it->second.first;
+                pos = graph.get_position_of_step(step) + it->second.second;
+            }
+        });
+        return found == 1;
+    };
+
+    // The top-level snarls that lie wholly inside each region, boundary nodes included.
+    map<pair<string, size_t>, vector<const Snarl*>> inside;
+    snarl_manager.for_each_top_level_snarl([&](const Snarl* snarl) {
+        string c1, c2;
+        size_t p1 = 0, p2 = 0;
+        if (!ref_pos(snarl->start().node_id(), c1, p1) || !ref_pos(snarl->end().node_id(), c2, p2) ||
+            c1 != c2) {
+            return;
+        }
+        size_t lo = min(p1, p2);
+        size_t hi = max(p1 + graph.get_length(graph.get_handle(snarl->start().node_id())),
+                        p2 + graph.get_length(graph.get_handle(snarl->end().node_id())));
+        const vector<Region>& rs = regions[c1];
+        auto it = upper_bound(rs.begin(), rs.end(), lo,
+                              [](size_t p, const Region& r) { return p < r.start; });
+        if (it == rs.begin()) {
+            return;
+        }
+        --it;
+        if (lo >= it->start && hi <= it->end) {
+            inside[make_pair(c1, (size_t)(it - rs.begin()))].push_back(snarl);
+        }
+    });
+
+    // One site per region whose snarls are consecutive links of one top-level chain.
+    size_t n_regions = 0, n_empty = 0, n_split = 0;
+    for (auto& kv : regions) {
+        n_regions += kv.second.size();
+    }
+    for (auto& kv : inside) {
+        vector<const Snarl*>& snarls = kv.second;
+        const Chain* chain = snarl_manager.chain_of(snarls.front());
+        bool one_chain = true;
+        size_t lo_rank = numeric_limits<size_t>::max(), hi_rank = 0;
+        for (const Snarl* snarl : snarls) {
+            if (snarl_manager.chain_of(snarl) != chain) {
+                one_chain = false;
+                break;
+            }
+            size_t rank = snarl_manager.chain_rank_of(snarl);
+            lo_rank = min(lo_rank, rank);
+            hi_rank = max(hi_rank, rank);
+        }
+        RepeatSite site;
+        if (one_chain && chain == nullptr) {
+            // A snarl alone, outside any chain: the site is that snarl.
+            one_chain = snarls.size() == 1;
+            if (one_chain) {
+                site.site = *snarls.front();
+                site.covered.push_back(snarls.front());
+            }
+        } else if (one_chain) {
+            const pair<const Snarl*, bool>& first = chain->at(lo_rank);
+            const pair<const Snarl*, bool>& last = chain->at(hi_rank);
+            // As call_top_level_chains builds a site spanning a piece of a chain.
+            *site.site.mutable_start() = first.second ? reverse(first.first->end()) : first.first->start();
+            *site.site.mutable_end() = last.second ? reverse(last.first->start()) : last.first->end();
+            for (size_t r = lo_rank; r <= hi_rank; ++r) {
+                site.covered.push_back(chain->at(r).first);
+            }
+        }
+        if (!one_chain) {
+            ++n_split;
+            continue;
+        }
+        for (const Snarl* snarl : site.covered) {
+            repeat_covered.insert(snarl);
+        }
+        nid_t a = site.site.start().node_id(), b = site.site.end().node_id();
+        repeat_site_bounds.insert(make_pair(min(a, b), max(a, b)));
+        repeat_sites.push_back(std::move(site));
+    }
+    n_empty = n_regions - inside.size();
+    cerr << "[vg call] repeat sites: " << repeat_sites.size() << " of " << n_regions
+         << " regions, covering " << repeat_covered.size() << " top-level snarls; " << n_empty
+         << " regions hold no top-level snarl on the reference and " << n_split
+         << " span more than one chain, and are called as usual" << endl;
 }
 
 unordered_map<size_t, array<int, 3>> FlowCaller::chosen_snapshot() {
@@ -7183,7 +7388,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
     // ploidy from. RecurseOnFail calls the children of a failed top-level snarl as top-level
     // snarls, but nothing does so for a failed nested snarl: its children are not called.
     if (ret_val && symbolic_manager != nullptr && !trav_genotype.empty() &&
-        parent_child_trav_sets == nullptr) {
+        parent_child_trav_sets == nullptr && !is_repeat_site(snarl)) {
         const Snarl* managed_ptr = snarl_manager.into_which_snarl(snarl.start().node_id(),
                                                                   snarl.start().backward());
         if (managed_ptr != nullptr) {
@@ -7295,7 +7500,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
 
 
     // In nested mode, recursively call child snarls
-    if (nested && !trav_genotype.empty()) {
+    if (nested && !trav_genotype.empty() && !is_repeat_site(snarl)) {
         // Find the managed snarl pointer so we can get its children
         const Snarl* managed_ptr = snarl_manager.into_which_snarl(snarl.start().node_id(), snarl.start().backward());
         if (managed_ptr) {

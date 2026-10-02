@@ -69,10 +69,14 @@ using SymbolicAllele = vector<SymbolicStep>;
  * covers. The ranges partition [0, visit_size) in order, so a step's sequence is the concatenation
  * of its visits. A chain symbol's range is [entry, exit): the exit boundary node belongs to the
  * next step, since the chain shares it with its successor.
+ *
+ * `plain` gives the plain node list even where `site` resolves, for a site whose child chains are
+ * not called on their own, such as a repeat site (--repeat-sites).
  */
 SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
                                const SnarlManager& snarl_manager,
-                               vector<pair<int, int>>* out_visit_ranges = nullptr);
+                               vector<pair<int, int>>* out_visit_ranges = nullptr,
+                               bool plain = false);
 
 /// Whether `site`, as given or reversed, is a snarl the manager knows, which is needed to
 /// recognise its child chains. When false, projection gives the plain node list with no symbols.

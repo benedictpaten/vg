@@ -80,7 +80,7 @@ pair<nid_t, nid_t> chain_bounds_of(const Snarl* child, const SnarlManager& snarl
 
 SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
                                const SnarlManager& snarl_manager,
-                               vector<pair<int, int>>* out_visit_ranges) {
+                               vector<pair<int, int>>* out_visit_ranges, bool plain) {
     SymbolicAllele out;
     if (out_visit_ranges != nullptr) {
         out_visit_ranges->clear();
@@ -90,7 +90,7 @@ SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
     // The snarl we are projecting, as the manager knows it, so that a snarl the traversal enters can
     // be tested for being a child of this site. Null means no child is recognised and the
     // projection is the plain node list (see `symbolic_site_resolvable`).
-    const Snarl* site_ptr = resolve_site(site, snarl_manager);
+    const Snarl* site_ptr = plain ? nullptr : resolve_site(site, snarl_manager);
 
     int i = 0;
     while (i < trav.visit_size()) {

@@ -320,6 +320,12 @@ void help_call(char** argv) {
          << "                            genotype" << endl
          << "      --bottom-up           genotype nested snarls before their parents" << endl
          << "  -I, --chains              call chains instead of snarls (experimental)" << endl
+         << "      --repeat-sites FILE   BED of CHROM START END regions, such as tandem" << endl
+         << "                            repeats, each genotyped as one site whose alleles" << endl
+         << "                            are the panel haplotypes' whole walks across it," << endl
+         << "                            with no nested calling inside it; CHROM is the VCF" << endl
+         << "                            contig name (needs --read-likelihood and a GBZ or" << endl
+         << "                            GBWT panel; experimental)" << endl
          << "  -L, --cluster F           merge called alt alleles whose length-weighted" << endl
          << "                            similarity is >= F, so 1/2 of two effectively" << endl
          << "                            identical alleles becomes 1/1 [1.0; experimental]" << endl
@@ -382,6 +388,7 @@ int main_call(int argc, char** argv) {
     // copied over from vg sim
     std::vector<std::pair<std::regex, size_t>> ploidy_rules;
     string ploidy_bed_filename;
+    string repeat_sites_filename;
 
     bool traversals_only = false;
     bool gaf_output = false;
@@ -544,6 +551,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_REGENO_LEDGER = 1086;
     constexpr int OPT_MIN_CONFIDENCE = 1042;
     constexpr int OPT_PLOIDY_BED = 1043;
+    constexpr int OPT_REPEAT_SITES = 1112;
     constexpr int OPT_NESTED = 1044;
     constexpr int OPT_NO_NESTED = 1045;
     constexpr int OPT_NO_OFF_REF_NESTING = 1101;
@@ -599,6 +607,7 @@ int main_call(int argc, char** argv) {
             {"ploidy", required_argument, 0, 'd'},
             {"ploidy-regex", required_argument, 0, 'R'},
             {"ploidy-bed", required_argument, 0, OPT_PLOIDY_BED},
+            {"repeat-sites", required_argument, 0, OPT_REPEAT_SITES},
             {"nested", no_argument, 0, OPT_NESTED},
             {"no-nested", no_argument, 0, OPT_NO_NESTED},
             {"gaf", no_argument, 0, 'G'},
@@ -1043,6 +1052,9 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_PLOIDY_BED:
             ploidy_bed_filename = require_exists(logger, optarg);
+            break;
+        case OPT_REPEAT_SITES:
+            repeat_sites_filename = require_exists(logger, optarg);
             break;
         case OPT_NESTED:
             nested_calling = true;
@@ -2420,6 +2432,19 @@ int main_call(int argc, char** argv) {
             return 1;
         }
         ploidy_target->set_ploidy_regions(ploidy_bed_filename);
+    }
+
+    // Repeat sites, each genotyped as one site of whole panel walks.
+    if (!repeat_sites_filename.empty()) {
+        FlowCaller* repeat_caller = dynamic_cast<FlowCaller*>(graph_caller.get());
+        if (!read_likelihood || !gbwt_enumeration || repeat_caller == nullptr) {
+            logger.error() << "--repeat-sites needs --read-likelihood with a GBZ or GBWT panel, "
+                           << "whose haplotypes give each site its whole-walk alleles" << endl;
+        }
+        if (call_chains) {
+            logger.error() << "--repeat-sites cannot be combined with -I/--chains" << endl;
+        }
+        repeat_caller->set_repeat_sites(repeat_sites_filename);
     }
 
     // Nested calling: a called traversal that takes the reference's route through a snarl,
