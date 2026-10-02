@@ -69,6 +69,10 @@ public:
 
         /// Floor on the switch probability, so that a switch is never impossible.
         double rho_min = 1e-3;
+        /// The switch probability between consecutive sites of one repeat region (--repeat-linkage),
+        /// whatever their distance: near zero, so that each strand copies one panel haplotype across
+        /// the whole repeat rather than a mosaic of several.
+        double repeat_rho = 1e-9;
 
         /// Escape probability for each strand whose allele is unknown, because it copies the
         /// wildcard haplotype or a panel haplotype that does not pass through the site. The
@@ -129,6 +133,10 @@ public:
         /// a site and its positioned parent (`group_parent`). Between such a site and any other
         /// positioned site, no distance is known.
         bool unpositioned = false;
+
+        /// The repeat region (--repeat-linkage) the site lies in, or -1. Two consecutive sites of
+        /// one region switch with probability `Params::repeat_rho`.
+        int32_t repeat = -1;
 
         /// This site is the parent its group is decoded under, held as the group's first site, so
         /// the next site is the parent's child and lies the child's offset along the parent's allele
@@ -548,6 +556,13 @@ public:
     /// The highest level any recorded site belongs to.
     size_t max_level() const;
 
+    /// The repeat regions (--repeat-linkage), as the record keys of the sites inside each, so that a
+    /// site recorded with one of those keys is tagged with its region (`Site::repeat`). Must be
+    /// called before any site is recorded.
+    void set_repeat_regions(unordered_map<size_t, int32_t> region_of_key) {
+        repeat_region_of_key = std::move(region_of_key);
+    }
+
     /// Bytes held by the collector, for reporting.
     size_t bytes() const;
 
@@ -577,6 +592,8 @@ private:
     static constexpr uint32_t NO_ENTRY = (uint32_t)-1;
 
     struct Entry {
+        /// See LinkageModel::Site::repeat.
+        int32_t repeat = -1;
         uint32_t position = 0;
         /// `SiteContext::freq_prior`. Placed in the padding before `chain_key`, so it does not
         /// enlarge the entry.
@@ -656,6 +673,8 @@ private:
     /// Per compact allele, the VCF allele it was emitted as, or -1 for none.
     vector<int8_t> allele_arena;
     vector<string> contig_names;
+    /// See set_repeat_regions.
+    unordered_map<size_t, int32_t> repeat_region_of_key;
     /// Reverse of `contig_names`, so that `record()` does not scan it. A gRef cover can give a run
     /// thousands of contigs.
     unordered_map<string, uint32_t> contig_index;

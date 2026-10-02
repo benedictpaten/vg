@@ -1344,9 +1344,11 @@ public:
     /// Each region becomes one repeat site spanning the top-level snarls that lie wholly inside it
     /// on the reference path, provided they are consecutive links of one top-level chain; any other
     /// region is skipped, with a count under --progress, and its snarls are called as usual. With
-    /// `descent`, a repeat site descends into the child chains of the snarls it covers. Must be
-    /// called before calling starts.
-    void set_repeat_sites(const string& bed_path, bool descent);
+    /// `descent`, a repeat site descends into the child chains of the snarls it covers. With
+    /// `linkage_only`, no repeat site is made: the snarls are called as usual, and the linkage model
+    /// only stops a strand switching panel haplotypes between two sites of one region. Must be
+    /// called before calling starts, and after the linkage model is set.
+    void set_repeat_sites(const string& bed_path, bool descent, bool linkage_only);
 
 protected:
 
