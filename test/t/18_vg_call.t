@@ -9,7 +9,7 @@ PATH=../bin:$PATH # for vg
 # FORMAT field shifts every later one, which broke four assertions here that were not
 # testing field order at all -- one of them silently compared BL against a GQ threshold.
 
-plan tests 471
+plan tests 476
 
 # Toy example of hand-made pileup (and hand inspected truth) to make sure some
 # obvious (and only obvious) SNPs are detected by vg call
@@ -3153,5 +3153,24 @@ vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-s
 is "$?" "0" "call: repeat sites run with --anchors-out, which writes nesting tags"
 vg call rpt.gbz --gam rpt.gam -t 1 -s samp --repeat-sites rpt.bed > /dev/null 2>&1
 is "$?" "1" "call: --repeat-sites needs --read-likelihood"
+# With no snarl nested inside the region, descent changes nothing.
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-sites rpt.bed --repeat-descent \
+    > rpt_desc.vcf 2>/dev/null
+cmp rpt_site.vcf rpt_desc.vcf > /dev/null
+is "$?" "0" "call: --repeat-descent with nothing nested gives the repeat site's records"
+# --repeat-linkage makes no repeat site; with read phasing, the reads that span both bubbles put
+# the sample's own alleles on one strand.
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --phased --repeat-sites rpt.bed --repeat-linkage \
+    --read-phasing --progress > rpt_link.vcf 2> rpt_link.err
+is $(grep -c "repeat linkage: 1 of 1 regions, over 2 top-level snarls" rpt_link.err) "1" \
+   "call: --repeat-linkage tags the two snarls of the region"
+is $(grep -v "^#" rpt_link.vcf | awk -F'\t' '$3 == ">1>4" || $3 == ">4>7"' | wc -l | tr -d ' ') "2" \
+   "call: and calls them as usual"
+is $(grep -v "^#" rpt_link.vcf | awk -F'\t' '$3 == ">1>4" || $3 == ">4>7" {split($10, f, ":"); split(f[1], g, "|"); gt[$2] = g[1] "" g[2]}
+     END {t = (substr(gt[31], 1, 1) == "1") ? 1 : 2; print (substr(gt[52], t, 1) == "0") ? "walks" : "stitched"}') "walks" \
+   "call: with read phasing its strands are the sample's walks"
+vg call rpt.gbz --read-likelihood --gam rpt.gam -t 1 -s samp --repeat-descent > /dev/null 2>&1
+is "$?" "1" "call: --repeat-descent needs --repeat-sites"
 
-rm -f rpt.gfa rpt.gbz rpt.gam rpt.bed rpt_plain.vcf rpt_site.vcf rpt_site.err rpt_none.vcf rpt_none.err rpt_anch.tsv
+rm -f rpt.gfa rpt.gbz rpt.gam rpt.bed rpt_plain.vcf rpt_site.vcf rpt_site.err rpt_none.vcf rpt_none.err rpt_anch.tsv \
+    rpt_desc.vcf rpt_link.vcf rpt_link.err
