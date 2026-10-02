@@ -8,6 +8,7 @@
 #include <functional>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <unordered_set>
 #include <tuple>
 #include <gbwt/cached_gbwt.h>
@@ -134,6 +135,18 @@ protected:
     /// See set_node_id_ordering.
     bool node_id_ordering = false;
     size_t node_id_window = 256;
+
+    /// A repeat site (--repeat-sites): one site spanning consecutive links of a top-level chain,
+    /// genotyped instead of the top-level snarls it covers, with no descent into them.
+    struct RepeatSite {
+        /// From the first covered link's start to the last covered link's end, in chain order.
+        Snarl site;
+        /// The top-level snarls it replaces, called normally if the site cannot be called.
+        vector<const Snarl*> covered;
+    };
+    vector<RepeatSite> repeat_sites;
+    /// Every covered snarl, which the top-level loop skips.
+    unordered_set<const Snarl*> repeat_covered;
 
     /// Toggle progress messages
     bool show_progress;
@@ -569,6 +582,21 @@ protected:
 
     /// Whether to decompose a snarl into one record per difference block.
     bool atomize_blocks = false;
+
+    /// The boundary node IDs of every repeat site (--repeat-sites), smaller first, so that a site
+    /// is recognised whichever way round the caller holds it. Filled before calling starts and only
+    /// read afterwards.
+    set<pair<nid_t, nid_t>> repeat_site_bounds;
+
+    /// Whether `snarl` is a repeat site: genotyped as one site, with no descent, and compared and
+    /// cut into block records as plain node walks.
+    bool is_repeat_site(const Snarl& snarl) const {
+        if (repeat_site_bounds.empty()) {
+            return false;
+        }
+        nid_t a = snarl.start().node_id(), b = snarl.end().node_id();
+        return repeat_site_bounds.count(make_pair(min(a, b), max(a, b))) > 0;
+    }
 
     /// The level of the site being recorded now: its depth among the nested chains, which
     /// decides when in a linkage pass its genotype is chosen. Thread-local because the direct pass
@@ -1286,6 +1314,13 @@ public:
     void set_max_snarl_edges(size_t edges) {
         max_snarl_edges = edges ? edges : numeric_limits<size_t>::max();
     }
+
+    /// Read --repeat-sites: a BED of CHROM START END regions, CHROM spelled as in the output VCF.
+    /// Each region becomes one repeat site spanning the top-level snarls that lie wholly inside it
+    /// on the reference path, provided they are consecutive links of one top-level chain; any other
+    /// region is skipped, with a count under --progress, and its snarls are called as usual. Must be
+    /// called before calling starts.
+    void set_repeat_sites(const string& bed_path);
 
 protected:
 
