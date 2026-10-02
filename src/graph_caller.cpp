@@ -2753,6 +2753,23 @@ thread_local VCFOutputCaller::NestedContext VCFOutputCaller::nested_context;
 thread_local size_t VCFOutputCaller::current_level = 0;
 thread_local bool VCFOutputCaller::last_emit_valid = false;
 
+SymbolicAllele VCFOutputCaller::project_allele(const SnarlTraversal& trav, const Snarl& snarl,
+                                               vector<pair<int, int>>* out_visit_ranges) const {
+    const RepeatCover* cover = repeat_cover_of(snarl);
+    if (cover == nullptr) {
+        return symbolic_allele(trav, snarl, *symbolic_manager, out_visit_ranges);
+    }
+    if (!repeat_descent) {
+        // Nothing inside the site is genotyped on its own, so nothing becomes a symbol.
+        return symbolic_allele(trav, snarl, *symbolic_manager, out_visit_ranges, true);
+    }
+    return symbolic_allele(trav, snarl, *symbolic_manager, out_visit_ranges, false, &cover->as_set);
+}
+
+bool VCFOutputCaller::projection_resolvable(const Snarl& snarl) const {
+    return is_repeat_site(snarl) || symbolic_site_resolvable(snarl, *symbolic_manager);
+}
+
 VCFOutputCaller::ChainInlineContext VCFOutputCaller::build_chain_inline_context(
     const Snarl& snarl, const vector<SnarlTraversal>& travs,
     const vector<int>& genotype, int ref_trav_idx) const {
@@ -2766,7 +2783,7 @@ VCFOutputCaller::ChainInlineContext VCFOutputCaller::build_chain_inline_context(
     }
     // A snarl whose projection has no symbols cannot answer: every child would read as not
     // reported and be dropped.
-    if (!symbolic_site_resolvable(snarl, *symbolic_manager)) {
+    if (!projection_resolvable(snarl)) {
         return ctx;
     }
     // A genotype with the reference allele matches every reference step, including the chain, so
@@ -2777,14 +2794,14 @@ VCFOutputCaller::ChainInlineContext VCFOutputCaller::build_chain_inline_context(
         }
     }
 
-    ctx.sref = symbolic_allele(travs[ref_trav_idx], snarl, *symbolic_manager);
+    ctx.sref = project_allele(travs[ref_trav_idx], snarl);
 
     for (int allele : genotype) {
         if (allele < 0 || (size_t)allele >= travs.size()) {
             continue;
         }
         ChainInlineContext::Alt alt;
-        alt.salt = symbolic_allele(travs[allele], snarl, *symbolic_manager);
+        alt.salt = project_allele(travs[allele], snarl);
         alt.blocks = symbolic_diff(ctx.sref, alt.salt);
         ctx.alts.push_back(std::move(alt));
     }
@@ -2871,10 +2888,8 @@ bool VCFOutputCaller::is_symbolically_reference(const vector<SnarlTraversal>& ca
         return false;
     }
     if (is_repeat_site(snarl)) {
-        // Nothing inside a repeat site is reported separately, so only the same walk is the
-        // reference.
-        return symbolic_allele(called_traversals[trav_idx], snarl, *symbolic_manager, nullptr, true) ==
-               symbolic_allele(called_traversals[ref_trav_idx], snarl, *symbolic_manager, nullptr, true);
+        return project_allele(called_traversals[trav_idx], snarl) ==
+               project_allele(called_traversals[ref_trav_idx], snarl);
     }
     return symbolically_equal(called_traversals[trav_idx], called_traversals[ref_trav_idx],
                               snarl, *symbolic_manager);
@@ -2937,9 +2952,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         ++atomize_counters.refuse[1];
         return -1;
     }
-    // A repeat site is cut as plain node walks, since nothing inside it is reported separately.
-    const bool plain = is_repeat_site(snarl);
-    if (!plain && !symbolic_site_resolvable(snarl, *symbolic_manager)) {
+    if (!projection_resolvable(snarl)) {
         // The projection would see no child chains here.
         ++atomize_counters.refuse[2];
         return -1;
@@ -2947,7 +2960,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
 
     const SnarlTraversal& ref_trav = called_traversals[ref_trav_idx];
     vector<pair<int, int>> ref_ranges;
-    SymbolicAllele sref = symbolic_allele(ref_trav, snarl, *symbolic_manager, &ref_ranges, plain);
+    SymbolicAllele sref = project_allele(ref_trav, snarl, &ref_ranges);
     const size_t m = sref.size();
     if (m == 0 || ref_ranges.size() != m) {
         ++atomize_counters.refuse[3];
@@ -3001,8 +3014,7 @@ int VCFOutputCaller::emit_block_records(const PathPositionHandleGraph& graph, co
         if (genotype[s] == ref_trav_idx) {
             continue;   // the reference itself: every step matches, so no blocks
         }
-        haps[s].sym = symbolic_allele(called_traversals[genotype[s]], snarl, *symbolic_manager,
-                                      &haps[s].ranges, plain);
+        haps[s].sym = project_allele(called_traversals[genotype[s]], snarl, &haps[s].ranges);
         haps[s].blocks = symbolic_diff(sref, haps[s].sym, &haps[s].alt_before_ref);
         if (haps[s].alt_before_ref.size() != m + 1) {
             ++atomize_counters.refuse[4];
@@ -5497,7 +5509,8 @@ bool FlowCaller::snarl_is_leaf(const Snarl& snarl) const {
     }
 }
 
-void FlowCaller::set_repeat_sites(const string& bed_path) {
+void FlowCaller::set_repeat_sites(const string& bed_path, bool descent) {
+    repeat_descent = descent;
     // The regions, by contig as the VCF spells it, each sorted by start. They may not overlap.
     struct Region {
         size_t start, end;
@@ -5640,7 +5653,9 @@ void FlowCaller::set_repeat_sites(const string& bed_path) {
             repeat_covered.insert(snarl);
         }
         nid_t a = site.site.start().node_id(), b = site.site.end().node_id();
-        repeat_site_bounds.insert(make_pair(min(a, b), max(a, b)));
+        RepeatCover& cover = repeat_site_cover[make_pair(min(a, b), max(a, b))];
+        cover.in_order = site.covered;
+        cover.as_set.insert(site.covered.begin(), site.covered.end());
         repeat_sites.push_back(std::move(site));
     }
     n_empty = n_regions - inside.size();
@@ -7388,10 +7403,23 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
     // ploidy from. RecurseOnFail calls the children of a failed top-level snarl as top-level
     // snarls, but nothing does so for a failed nested snarl: its children are not called.
     if (ret_val && symbolic_manager != nullptr && !trav_genotype.empty() &&
-        parent_child_trav_sets == nullptr && !is_repeat_site(snarl)) {
-        const Snarl* managed_ptr = snarl_manager.into_which_snarl(snarl.start().node_id(),
-                                                                  snarl.start().backward());
-        if (managed_ptr != nullptr) {
+        parent_child_trav_sets == nullptr && (!is_repeat_site(snarl) || repeat_descent)) {
+        // The snarls to descend into: the snarl's children, or a repeat site's, which are those of
+        // every snarl it covers, in chain order.
+        vector<const Snarl*> site_children;
+        if (const RepeatCover* cover = repeat_cover_of(snarl)) {
+            for (const Snarl* covered : cover->in_order) {
+                const vector<const Snarl*>& kids = snarl_manager.children_of(covered);
+                site_children.insert(site_children.end(), kids.begin(), kids.end());
+            }
+        } else {
+            const Snarl* managed_ptr = snarl_manager.into_which_snarl(snarl.start().node_id(),
+                                                                      snarl.start().backward());
+            if (managed_ptr != nullptr) {
+                site_children = snarl_manager.children_of(managed_ptr);
+            }
+        }
+        if (!site_children.empty()) {
 
             // The child-independent parts of the exactly-once test, built once for this snarl.
             const ChainInlineContext inline_ctx =
@@ -7402,7 +7430,7 @@ bool FlowCaller::call_snarl_internal(const Snarl& managed_snarl,
             for (const SnarlTraversal& t : travs) {
                 trav_visits.push_back(index_traversal_nodes(t));
             }
-            for (const Snarl* child : snarl_manager.children_of(managed_ptr)) {
+            for (const Snarl* child : site_children) {
                 if (child == nullptr || snarl_manager.is_trivial(child, graph)) {
                     continue;
                 }

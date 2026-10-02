@@ -8,6 +8,7 @@
 #include <functional>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <set>
 #include <unordered_set>
 #include <tuple>
@@ -583,20 +584,44 @@ protected:
     /// Whether to decompose a snarl into one record per difference block.
     bool atomize_blocks = false;
 
-    /// The boundary node IDs of every repeat site (--repeat-sites), smaller first, so that a site
-    /// is recognised whichever way round the caller holds it. Filled before calling starts and only
+    /// The top-level snarls a repeat site (--repeat-sites) covers, in chain order and as a set.
+    struct RepeatCover {
+        vector<const Snarl*> in_order;
+        unordered_set<const Snarl*> as_set;
+    };
+    /// Every repeat site's cover, keyed by its boundary node IDs, smaller first, so that a site is
+    /// recognised whichever way round the caller holds it. Filled before calling starts and only
     /// read afterwards.
-    set<pair<nid_t, nid_t>> repeat_site_bounds;
+    map<pair<nid_t, nid_t>, RepeatCover> repeat_site_cover;
+    /// Whether a repeat site descends into the child chains of the snarls it covers
+    /// (--repeat-descent). Without it nothing inside a repeat site is genotyped on its own.
+    bool repeat_descent = false;
 
-    /// Whether `snarl` is a repeat site: genotyped as one site, with no descent, and compared and
-    /// cut into block records as plain node walks.
-    bool is_repeat_site(const Snarl& snarl) const {
-        if (repeat_site_bounds.empty()) {
-            return false;
+    /// The cover of `snarl` if it is a repeat site, or null.
+    const RepeatCover* repeat_cover_of(const Snarl& snarl) const {
+        if (repeat_site_cover.empty()) {
+            return nullptr;
         }
         nid_t a = snarl.start().node_id(), b = snarl.end().node_id();
-        return repeat_site_bounds.count(make_pair(min(a, b), max(a, b))) > 0;
+        auto found = repeat_site_cover.find(make_pair(min(a, b), max(a, b)));
+        return found == repeat_site_cover.end() ? nullptr : &found->second;
     }
+
+    /// Whether `snarl` is a repeat site: genotyped as one site of whole panel walks.
+    bool is_repeat_site(const Snarl& snarl) const {
+        return repeat_cover_of(snarl) != nullptr;
+    }
+
+    /// The symbolic projection the output uses for `trav` at `snarl`. At a repeat site it is the
+    /// plain node walk, or with --repeat-descent the walk with the child chains of the snarls it
+    /// covers as symbols, since those are the chains descent genotypes; elsewhere it is
+    /// symbolic_allele's.
+    SymbolicAllele project_allele(const SnarlTraversal& trav, const Snarl& snarl,
+                                  vector<pair<int, int>>* out_visit_ranges = nullptr) const;
+
+    /// Whether the output can project `snarl`'s alleles with child chains as symbols: always at a
+    /// repeat site, and elsewhere when the snarl manager resolves it.
+    bool projection_resolvable(const Snarl& snarl) const;
 
     /// The level of the site being recorded now: its depth among the nested chains, which
     /// decides when in a linkage pass its genotype is chosen. Thread-local because the direct pass
@@ -1318,9 +1343,10 @@ public:
     /// Read --repeat-sites: a BED of CHROM START END regions, CHROM spelled as in the output VCF.
     /// Each region becomes one repeat site spanning the top-level snarls that lie wholly inside it
     /// on the reference path, provided they are consecutive links of one top-level chain; any other
-    /// region is skipped, with a count under --progress, and its snarls are called as usual. Must be
+    /// region is skipped, with a count under --progress, and its snarls are called as usual. With
+    /// `descent`, a repeat site descends into the child chains of the snarls it covers. Must be
     /// called before calling starts.
-    void set_repeat_sites(const string& bed_path);
+    void set_repeat_sites(const string& bed_path, bool descent);
 
 protected:
 

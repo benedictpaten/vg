@@ -80,7 +80,8 @@ pair<nid_t, nid_t> chain_bounds_of(const Snarl* child, const SnarlManager& snarl
 
 SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
                                const SnarlManager& snarl_manager,
-                               vector<pair<int, int>>* out_visit_ranges, bool plain) {
+                               vector<pair<int, int>>* out_visit_ranges, bool plain,
+                               const unordered_set<const Snarl*>* parents) {
     SymbolicAllele out;
     if (out_visit_ranges != nullptr) {
         out_visit_ranges->clear();
@@ -90,7 +91,7 @@ SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
     // The snarl we are projecting, as the manager knows it, so that a snarl the traversal enters can
     // be tested for being a child of this site. Null means no child is recognised and the
     // projection is the plain node list (see `symbolic_site_resolvable`).
-    const Snarl* site_ptr = plain ? nullptr : resolve_site(site, snarl_manager);
+    const Snarl* site_ptr = (plain || parents != nullptr) ? nullptr : resolve_site(site, snarl_manager);
 
     int i = 0;
     while (i < trav.visit_size()) {
@@ -118,8 +119,9 @@ SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
         // Only a child of this site may become a symbol. Comparing the chain's boundaries with the
         // site's is not enough: a site that is itself in a longer chain would see that chain's
         // boundaries and collapse its own interior into one symbol, making all its alleles equal.
-        bool is_child = child != nullptr && site_ptr != nullptr &&
-                        snarl_manager.parent_of(child) == site_ptr;
+        bool is_child = child != nullptr &&
+                        ((site_ptr != nullptr && snarl_manager.parent_of(child) == site_ptr) ||
+                         (parents != nullptr && parents->count(snarl_manager.parent_of(child))));
         if (is_child) {
             pair<nid_t, nid_t> bounds = chain_bounds(child, snarl_manager);
             {

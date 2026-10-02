@@ -326,6 +326,9 @@ void help_call(char** argv) {
          << "                            with no nested calling inside it; CHROM is the VCF" << endl
          << "                            contig name (needs --read-likelihood and a GBZ or" << endl
          << "                            GBWT panel; experimental)" << endl
+         << "      --repeat-descent      at a repeat site, genotype the snarls nested in its" << endl
+         << "                            whole-walk alleles, as nested calling does at other" << endl
+         << "                            sites (experimental)" << endl
          << "  -L, --cluster F           merge called alt alleles whose length-weighted" << endl
          << "                            similarity is >= F, so 1/2 of two effectively" << endl
          << "                            identical alleles becomes 1/1 [1.0; experimental]" << endl
@@ -389,6 +392,7 @@ int main_call(int argc, char** argv) {
     std::vector<std::pair<std::regex, size_t>> ploidy_rules;
     string ploidy_bed_filename;
     string repeat_sites_filename;
+    bool repeat_descent = false;
 
     bool traversals_only = false;
     bool gaf_output = false;
@@ -552,6 +556,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_MIN_CONFIDENCE = 1042;
     constexpr int OPT_PLOIDY_BED = 1043;
     constexpr int OPT_REPEAT_SITES = 1112;
+    constexpr int OPT_REPEAT_DESCENT = 1113;
     constexpr int OPT_NESTED = 1044;
     constexpr int OPT_NO_NESTED = 1045;
     constexpr int OPT_NO_OFF_REF_NESTING = 1101;
@@ -608,6 +613,7 @@ int main_call(int argc, char** argv) {
             {"ploidy-regex", required_argument, 0, 'R'},
             {"ploidy-bed", required_argument, 0, OPT_PLOIDY_BED},
             {"repeat-sites", required_argument, 0, OPT_REPEAT_SITES},
+            {"repeat-descent", no_argument, 0, OPT_REPEAT_DESCENT},
             {"nested", no_argument, 0, OPT_NESTED},
             {"no-nested", no_argument, 0, OPT_NO_NESTED},
             {"gaf", no_argument, 0, 'G'},
@@ -1055,6 +1061,9 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_REPEAT_SITES:
             repeat_sites_filename = require_exists(logger, optarg);
+            break;
+        case OPT_REPEAT_DESCENT:
+            repeat_descent = true;
             break;
         case OPT_NESTED:
             nested_calling = true;
@@ -2444,7 +2453,9 @@ int main_call(int argc, char** argv) {
         if (call_chains) {
             logger.error() << "--repeat-sites cannot be combined with -I/--chains" << endl;
         }
-        repeat_caller->set_repeat_sites(repeat_sites_filename);
+        repeat_caller->set_repeat_sites(repeat_sites_filename, repeat_descent);
+    } else if (repeat_descent) {
+        logger.error() << "--repeat-descent needs --repeat-sites" << endl;
     }
 
     // Nested calling: a called traversal that takes the reference's route through a snarl,
