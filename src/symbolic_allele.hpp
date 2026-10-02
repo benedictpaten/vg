@@ -18,6 +18,7 @@
 #include <functional>
 #include <utility>
 #include <ostream>
+#include <unordered_set>
 #include <vector>
 
 #include "handle.hpp"
@@ -71,12 +72,16 @@ using SymbolicAllele = vector<SymbolicStep>;
  * next step, since the chain shares it with its successor.
  *
  * `plain` gives the plain node list even where `site` resolves, for a site whose child chains are
- * not called on their own, such as a repeat site (--repeat-sites).
+ * not called on their own, such as a repeat site (--repeat-sites) without descent.
+ *
+ * `parents`, when given, makes the site the merger of those snarls, as a repeat site with descent
+ * is: a chain is a child when its parent is one of them, whether or not `site` resolves.
  */
 SymbolicAllele symbolic_allele(const SnarlTraversal& trav, const Snarl& site,
                                const SnarlManager& snarl_manager,
                                vector<pair<int, int>>* out_visit_ranges = nullptr,
-                               bool plain = false);
+                               bool plain = false,
+                               const unordered_set<const Snarl*>* parents = nullptr);
 
 /// Whether `site`, as given or reversed, is a snarl the manager knows, which is needed to
 /// recognise its child chains. When false, projection gives the plain node list with no symbols.
