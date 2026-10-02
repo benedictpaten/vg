@@ -354,6 +354,40 @@ these cases:
 - When the reference paths include a [gRef fragment](#graph). A chain on a gRef fragment then gets
   records, with the fragment as their contig.
 
+## Repeat sites
+
+A tandem repeat that the graph cuts into several adjacent sites can be genotyped as a combination of
+alleles from different panel haplotypes, one at each site: a haplotype that no panel haplotype
+carries. `--repeat-sites` takes a BED of `CHROM START END` regions, such as tandem repeats,
+`CHROM` spelled as in the output VCF, and genotypes each region as one **repeat site**:
+
+- The repeat site spans the top-level sites that lie wholly inside the region on the reference
+  path, from the first one's start boundary node to the last one's end boundary node. Those sites
+  must be consecutive sites of one top-level chain.
+- Its candidate alleles are the walks the panel haplotypes take across the whole region, so each of
+  its strands is a walk that some panel haplotype takes. It needs haplotype enumeration.
+- Its reads are those of every site it spans, scored against the whole walks.
+- It takes part in the linkage model and phasing as one top-level site.
+- Its differences from the reference allele are written as [block records](#block-records), one
+  per difference, with IDs that are the repeat site's ID followed by `_` and an index.
+
+Nothing inside a repeat site is genotyped on its own, unless `--repeat-descent` is given. With it,
+the repeat site's children are the child chains of the sites it spans, genotyped by descent as at
+any other site (see [Nested sites](#nested-sites)), and its own alleles are compared with the
+reference allele with those chains as symbols.
+
+`--repeat-linkage` makes no repeat sites. The sites inside each region are genotyped as usual, and
+the linkage model gives two consecutive sites of one region a near-zero switch probability, so that
+each strand copies one panel haplotype across the region. Unlike a repeat site, it sees each site's
+likelihoods separately, so it cannot use a read that spans two sites to tell which of their alleles
+go together; read phasing can.
+
+A region is skipped, and its sites genotyped as usual, when it holds no top-level site wholly inside
+it or when its sites are not consecutive sites of one chain. A repeat site that cannot be genotyped,
+for example because no reference path runs from one of its boundary nodes to the other, is replaced
+by the sites it spans. Regions must not overlap. `--repeat-sites` needs `--read-likelihood` with a
+GBZ or GBWT panel, and cannot be combined with `-I`. All three options are experimental.
+
 ## Phasing
 
 Phasing decides each genotype's phase: which strand carries which allele. At ploidy 2, a site's
@@ -805,6 +839,7 @@ by `vg call --help`.
 | [Depth term](read-likelihood-direct-genotyping.md#depth-term) | `--depth-term`, `--depth-count-raw` |
 | [Linkage](read-likelihood-linkage-model.md) | `--linkage-weight`, `--linkage-scale`, `--linkage-prior`, `--hp-prior`, `--hp-prior-run` |
 | [Nested sites](#nested-sites) | `--nested`, `--no-nested`, `--atomize-blocks`, `--no-atomize-blocks`, `--no-off-ref-nesting` |
+| [Repeat sites](#repeat-sites) | `--repeat-sites`, `--repeat-descent`, `--repeat-linkage` |
 | [Ploidy](#ploidy) | `--ploidy`, `--ploidy-regex`, `--ploidy-bed` |
 | [Phasing](#phasing) | `--phased`, `--no-phased`, `--read-phasing`, `--no-read-phasing`, `--phase-min-q`, `--phase-coherence`, `--phase-coh-rounds`, `--phase-break`, `--phase-relink`, `--phase-hang`, `--phase-prior`, `--phase-cap` |
 | [Re-genotyping](#re-genotyping-from-the-phase) | `--regenotype`, `--no-regenotype`, `--regeno-temper`, `--regeno-ceiling`, `--regeno-passes`, `--regeno-haploid`, `--no-regeno-haploid`, `--regeno-ledger` |
