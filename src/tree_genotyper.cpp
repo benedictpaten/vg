@@ -18,7 +18,17 @@ void TreeGenotyper::configure(const Parts& parts, const Options& options) {
 
 bool TreeGenotyper::genotype(const SiteView& site) {
     // A top-level site has no parent context.
-    return genotype_tree(site, "", make_pair(0, 0), nullptr, -1, NestingPlacement());
+    const bool genotyped = genotype_tree(site, "", make_pair(0, 0), nullptr, -1, NestingPlacement());
+    if (parts.edit_source != nullptr && site.enclosing.empty()) {
+        // The edit sites on the chain node this site starts at, which no site holds, while the
+        // node's reads are in memory. Each chain node but the last starts one site.
+        vector<EditCandidate> on_start;
+        parts.edit_source->for_each_edit_candidate(
+            {parts.graph->get_id(site.bounds.start)},
+            [&](const EditCandidate& c) { on_start.push_back(c); });
+        genotype_free_edits(std::move(on_start));
+    }
+    return genotyped;
 }
 
 bool TreeGenotyper::genotype_tree(const SiteView& view, const string& parent_ref_path_name,
@@ -500,9 +510,40 @@ vector<TreeGenotyper::HeldEdit> TreeGenotyper::edits_held_by(const SiteView& vie
 }
 
 void TreeGenotyper::genotype_top_level_edits(vector<EditCandidate> candidates) {
+    vector<EditCandidate> left;
+    for (EditCandidate& c : candidates) {
+        if (!free_edit_nodes.count(c.node)) {
+            left.push_back(std::move(c));
+        }
+    }
+    // By node, since each node's are genotyped together.
+    vector<vector<EditCandidate>> by_node;
+    for (EditCandidate& c : admitted(std::move(left))) {
+        if (by_node.empty() || by_node.back().front().node != c.node) {
+            by_node.emplace_back();
+        }
+        by_node.back().push_back(std::move(c));
+    }
+#pragma omp parallel for schedule(dynamic, 1)
+    for (size_t i = 0; i < by_node.size(); ++i) {
+        genotype_free_edits(by_node[i]);
+    }
+}
+
+void TreeGenotyper::genotype_free_edits(vector<EditCandidate> candidates) {
+    if (candidates.empty()) {
+        return;
+    }
+    {
+        // Once per node: a node starts one site, but the site may be visited again as the child
+        // of a failed site under RecurseOnFail.
+        std::lock_guard<std::mutex> lock(free_edit_mutex);
+        if (!free_edit_nodes.insert(candidates.front().node).second) {
+            return;
+        }
+    }
     const PathPositionHandleGraph& graph = *parts.graph;
     const vector<EditCandidate> chosen = admitted(std::move(candidates));
-#pragma omp parallel for schedule(dynamic, 1)
     for (size_t i = 0; i < chosen.size(); ++i) {
         const EditCandidate& c = chosen[i];
         NodePlacement where = parts.child_placer->placement_of(c.node);

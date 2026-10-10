@@ -4,6 +4,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,8 +83,11 @@ public:
     bool genotype(const SiteView& site);
 
     /// Genotype and stage, as top-level sites, the edit sites of the off-panel candidates
-    /// `candidates` (sorted) that no site holds. An edit site a site holds is one of that site's
-    /// children, genotyped and staged in its descent. Runs on several threads.
+    /// `candidates` (sorted) that no site holds and that the direct pass did not reach: those
+    /// on a node that starts no top-level site, as at a chain's end. A top-level site genotypes
+    /// those on the node it starts at, while their reads are in memory, and an edit site a site
+    /// holds is one of that site's children, genotyped and staged in its descent. Runs on several
+    /// threads.
     void genotype_top_level_edits(vector<EditCandidate> candidates);
 
 private:
@@ -92,6 +97,14 @@ private:
         EditSite site;
         EditCandidate candidate;
     };
+
+    /// Genotype and stage, as top-level sites, the edit sites of `candidates` (sorted) that no
+    /// site holds, unless their node's were already, and note their node as done.
+    void genotype_free_edits(vector<EditCandidate> candidates);
+
+    /// The nodes whose free edit sites have been genotyped.
+    std::mutex free_edit_mutex;
+    unordered_set<nid_t> free_edit_nodes;
 
     /// The candidates the call bar admits, one per base: the ALT the most fragments carry.
     vector<EditCandidate> admitted(vector<EditCandidate> candidates) const;
