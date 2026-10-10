@@ -120,6 +120,12 @@ vector<SiteBounds> enclosing_sites(const SnarlDecomposition& decomposition,
 ChildChain chain_of_site(const SnarlDecomposition& decomposition, const HandleGraph& graph,
                          const net_handle_t& site);
 
+/// The key that tells `chain` from the other chains under the same parent, from the node IDs of
+/// its bounds as `oriented_bounds` gives them. The linkage model groups a parent's child sites by
+/// it. A node that bounds no site is a chain of one node, whose bounds are that node at
+/// both ends, and it has a key like any other chain.
+size_t chain_key_of(const HandleGraph& graph, const ChildChain& chain);
+
 }
 }
 

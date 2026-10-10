@@ -99,9 +99,8 @@ struct NestingPlacement {
     /// its own line would repeat it. The chain is still genotyped and recorded, and its line is
     /// held back when records are rendered. Inherited.
     bool reported_inline = false;
-    /// Identifies the chain being descended into, from its boundary nodes. The linkage model
-    /// groups a chain's sites by it, and chains under one parent have no transitions between
-    /// them.
+    /// Identifies the chain being descended into (`chain_key_of`). The linkage model groups a
+    /// chain's sites by it, and chains under one parent have no transitions between them.
     size_t chain_key = 0;
     /// False when the parent has more than 64 candidate traversals, too many for the crossing
     /// mask. A 0 mask then means unknown rather than "no allele crosses".

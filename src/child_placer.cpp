@@ -310,12 +310,7 @@ void ChildPlacer::place(const SiteView& site, const Nested& nested, size_t site_
         next.parent_offset =
             placement.parent_offset + offset_along_genotype(travs, genotype, child_bounds);
         next.reported_inline = child_reported_inline;
-        // The chain's identity, from its boundary nodes.
-        {
-            const nid_t first = graph->get_id(out.chain.start);
-            const nid_t second = graph->get_id(out.chain.end);
-            next.chain_key = (size_t)((uint64_t)first * 1000003ULL) ^ (size_t)(uint64_t)second;
-        }
+        next.chain_key = chain_key_of(*graph, out.chain);
         bool crossing_known = true;   // child_crossing_mask always sets it
         // The mask is over this snarl's own candidate traversals, which exist whether or not
         // a line was written.

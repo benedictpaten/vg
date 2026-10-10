@@ -161,5 +161,11 @@ ChildChain chain_of_site(const SnarlDecomposition& decomposition, const HandleGr
     return oriented_bounds(decomposition, graph, decomposition.get_parent(site));
 }
 
+size_t chain_key_of(const HandleGraph& graph, const ChildChain& chain) {
+    const nid_t first = graph.get_id(chain.start);
+    const nid_t second = graph.get_id(chain.end);
+    return (size_t)((uint64_t)first * 1000003ULL) ^ (size_t)(uint64_t)second;
+}
+
 }
 }
