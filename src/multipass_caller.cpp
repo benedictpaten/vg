@@ -147,7 +147,8 @@ void MultiPassCaller::write_edit_dump() const {
         cerr << "[vg call] off-panel: " << edit_source->counted_edit_candidates().size()
              << " candidates counted; the call bar's genotyped as " << top << " top-level and "
              << nested << " nested sites, " << unplaced << " left unplaced; " << staged
-             << " staged with their ALT" << endl;
+             << " staged with their ALT; " << tree_genotyper.edit_nodes_after_pass()
+             << " nodes' top-level sites left to after the direct pass" << endl;
     }
     if (edit_dump.empty()) {
         return;

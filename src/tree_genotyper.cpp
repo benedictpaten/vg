@@ -22,23 +22,26 @@ bool TreeGenotyper::genotype(const SiteView& site) {
     if (parts.edit_source != nullptr && site.enclosing.empty()) {
         // The edit sites on the chain nodes this site lies between, which no site holds, while
         // their reads are in memory. A node between two sites is taken by the first to reach it.
-        // A site too wide for the read cache takes none, since fetching its far bound's window
-        // now, out of the walk's order, would fetch it again when the walk gets there.
-        vector<nid_t> bounds{parts.graph->get_id(site.bounds.start),
-                             parts.graph->get_id(site.bounds.end)};
-        std::sort(bounds.begin(), bounds.end());
-        bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
-        vector<EditCandidate> on_bounds;
-        if (parts.edit_source->for_each_edit_candidate(
-                bounds, [&](const EditCandidate& c) { on_bounds.push_back(c); }, false)) {
-            for (nid_t node : bounds) {
-                vector<EditCandidate> on_node;
-                for (const EditCandidate& c : on_bounds) {
-                    if (c.node == node) {
-                        on_node.push_back(c);
-                    }
-                }
-                genotype_free_edits(std::move(on_node));
+        // A site too wide for the read cache takes only the bound the walk is at, since fetching
+        // its far bound's window now, out of the walk's order, would fetch it again when the walk
+        // gets there; the site beyond that bound takes it.
+        const nid_t first = std::min(parts.graph->get_id(site.bounds.start),
+                                     parts.graph->get_id(site.bounds.end));
+        const nid_t last = std::max(parts.graph->get_id(site.bounds.start),
+                                    parts.graph->get_id(site.bounds.end));
+        vector<EditCandidate> on_first;
+        parts.edit_source->for_each_edit_candidate(
+            {first}, [&](const EditCandidate& c) { on_first.push_back(c); });
+        genotype_free_edits(std::move(on_first));
+        if (last != first) {
+            vector<EditCandidate> on_last;
+            if (parts.edit_source->for_each_edit_candidate(
+                    {first, last}, [&](const EditCandidate& c) {
+                        if (c.node == last) {
+                            on_last.push_back(c);
+                        }
+                    }, false)) {
+                genotype_free_edits(std::move(on_last));
             }
         }
     }
@@ -540,6 +543,7 @@ void TreeGenotyper::genotype_top_level_edits(vector<EditCandidate> candidates) {
         }
         by_node.back().push_back(std::move(c));
     }
+    after_pass_nodes = by_node.size();
 #pragma omp parallel for schedule(dynamic, 1)
     for (size_t i = 0; i < by_node.size(); ++i) {
         genotype_free_edits(by_node[i]);

@@ -89,6 +89,9 @@ public:
     /// that site's children, genotyped and staged in its descent. Runs on several threads.
     void genotype_top_level_edits(vector<EditCandidate> candidates);
 
+    /// How many nodes' top-level edit sites `genotype_top_level_edits` was left to genotype.
+    size_t edit_nodes_after_pass() const { return after_pass_nodes; }
+
 private:
     /// An off-panel candidate's edit site, as a child of the site holding it.
     struct HeldEdit {
@@ -104,6 +107,7 @@ private:
     /// The nodes whose free edit sites have been genotyped.
     std::mutex free_edit_mutex;
     unordered_set<nid_t> free_edit_nodes;
+    size_t after_pass_nodes = 0;
 
     /// The candidates the call bar admits, one per base: the ALT the most fragments carry.
     vector<EditCandidate> admitted(vector<EditCandidate> candidates) const;
