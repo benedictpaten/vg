@@ -110,7 +110,7 @@ private:
                                                int ref_offset, int ploidy) const;
 
     /// Give a staged site what it keeps of the decomposition: `children`, which `view`, the
-    /// site, holds, whether it is a leaf, and its chain.
+    /// site, holds, whether it is a leaf, its chain, and the sites enclosing it.
     void fill_tree_fields(const SiteView& view, const SiteChildren& children,
                           StagedSite& site) const;
 

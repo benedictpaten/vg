@@ -18,6 +18,8 @@
 #include "../child_placer.hpp"
 #include "../phase_table.hpp"
 #include "../read_strand_table.hpp"
+#include "../staged_site.hpp"
+#include "../vcf_record.hpp"
 
 namespace vg {
 namespace unittest {
@@ -220,6 +222,70 @@ TEST_CASE("A site inside a node is crossed by each visit to it, and a cyclic sit
         REQUIRE(known);
         REQUIRE(ChildPlacer::child_crossing_mask(graph, visits, cyclic, &known) == 0b100);
     }
+}
+
+
+TEST_CASE("The staged-site tree places each site under the sites enclosing it, once each",
+          "[graph_caller]") {
+    bdsg::HashGraph graph;
+    add_numbered_nodes(graph);
+    auto bounds = [&](nid_t start, bool start_back, nid_t end, bool end_back) {
+        return SiteBounds{graph.get_handle(start, start_back), graph.get_handle(end, end_back)};
+    };
+    auto name = [&](const SiteBounds& site) {
+        return site_name(graph, site.start, site.end, nullptr, false);
+    };
+    StagedSiteTable table;
+    table.start(1);
+    auto stage = [&](const SiteBounds& site, const string& id, vector<SiteBounds> enclosing) {
+        StagedSite staged;
+        staged.bounds = site;
+        staged.id = id;
+        staged.enclosing = std::move(enclosing);
+        table.add_top_level(std::move(staged));
+    };
+    // A top-level site 1..8, and inside it 2..7, staged read backward as the reference might
+    // orient it. Inside that, 3..5 is not staged, and inside 3..5 a site inside node 4 has an ID
+    // of its own.
+    const SiteBounds outer = bounds(1, false, 8, false);
+    const SiteBounds middle = bounds(2, false, 7, false);
+    const SiteBounds unstaged = bounds(3, false, 5, false);
+    SiteBounds inside = bounds(4, false, 4, false);
+    inside.inside_node = true;
+    stage(outer, name(outer), {});
+    stage(bounds(7, true, 2, true), "<7<2", {outer});
+    stage(inside, "4:1:G", {unstaged, middle, outer});
+
+    const StagedSiteTree tree(table, graph, name);
+    vector<SiteTree::site_t> order;
+    tree.for_each_site([&](SiteTree::site_t site) { order.push_back(site); }, true);
+    // The middle site is one node, though it was staged one way round and encloses the other.
+    REQUIRE(order.size() == 4);
+    for (size_t i = 0; i < order.size(); ++i) {
+        const SiteTree::site_t parent = tree.parent_of(order[i]);
+        // Preorder: each site comes after the site enclosing it.
+        REQUIRE((parent == nullptr
+                 || std::find(order.begin(), order.begin() + i, parent) != order.begin() + i));
+    }
+    SiteTree::site_t own = nullptr;
+    for (SiteTree::site_t site : order) {
+        if (tree.id_of(site) != nullptr) {
+            REQUIRE(own == nullptr);
+            own = site;
+        }
+    }
+    REQUIRE(own != nullptr);
+    REQUIRE(*tree.id_of(own) == "4:1:G");
+    // Its ancestors, innermost first, are named by their boundary visits. The middle site keeps
+    // the orientation it was first added in, which the nesting tags read either way round.
+    vector<string> ancestors;
+    for (SiteTree::site_t site = tree.parent_of(own); site != nullptr; site = tree.parent_of(site)) {
+        REQUIRE(tree.id_of(site) == nullptr);
+        const SiteEnds ends = tree.ends_of(site);
+        ancestors.push_back(site_name(ends.start_id, ends.start_backward, ends.end_id,
+                                      ends.end_backward, nullptr, false));
+    }
+    REQUIRE(ancestors == vector<string>({">3>5", "<7<2", ">1>8"}));
 }
 
 

@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <iterator>
+#include <map>
+#include <tuple>
 
 #include <omp.h>
 
@@ -170,6 +172,73 @@ StagedSiteTable::HandOff StagedSiteTable::hand_off() {
 
 size_t StagedSiteTable::queued_count() const {
     return total_queued(queues);
+}
+
+StagedSiteTree::StagedSiteTree(StagedSiteTable& sites, const HandleGraph& graph,
+                               const function<string(const SiteBounds&)>& name) {
+    // A site named by its bounds is one node, however many staged sites it encloses and whether
+    // or not it was staged itself, so it is found by its bounds whichever way round they are read.
+    using BoundsKey = tuple<uint64_t, uint64_t, bool>;
+    auto key_of = [&](const SiteBounds& bounds) {
+        const BoundsKey forward(handlegraph::as_integer(bounds.start),
+                                handlegraph::as_integer(bounds.end), bounds.inside_node);
+        const BoundsKey turned(handlegraph::as_integer(graph.flip(bounds.end)),
+                               handlegraph::as_integer(graph.flip(bounds.start)),
+                               bounds.inside_node);
+        return min(forward, turned);
+    };
+    auto ends_of_bounds = [&](const SiteBounds& bounds) {
+        return SiteEnds{graph.get_id(bounds.start), graph.get_is_reverse(bounds.start),
+                        graph.get_id(bounds.end), graph.get_is_reverse(bounds.end)};
+    };
+    map<BoundsKey, const Node*> by_bounds;
+    auto node_for = [&](const SiteBounds& bounds, const Node* parent) {
+        auto found = by_bounds.find(key_of(bounds));
+        if (found != by_bounds.end()) {
+            return found->second;
+        }
+        nodes.push_back(Node{ends_of_bounds(bounds), string(), parent});
+        by_bounds.emplace(key_of(bounds), &nodes.back());
+        return (const Node*)&nodes.back();
+    };
+    sites.for_each([&](StagedSite& site) {
+        // The enclosing sites, outermost first, so that each is added after its own parent.
+        const Node* parent = nullptr;
+        for (auto it = site.enclosing.rbegin(); it != site.enclosing.rend(); ++it) {
+            parent = node_for(*it, parent);
+        }
+        if (site.id == name(site.bounds)) {
+            node_for(site.bounds, parent);
+        } else {
+            nodes.push_back(Node{ends_of_bounds(site.bounds), site.id, parent});
+        }
+    });
+}
+
+void StagedSiteTree::for_each_site(const function<void(site_t)>& visit, bool in_preorder) const {
+    if (in_preorder) {
+        for (const Node& node : nodes) {
+            visit(&node);
+        }
+        return;
+    }
+#pragma omp parallel for schedule(dynamic, 1024)
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        visit(&nodes[i]);
+    }
+}
+
+SiteTree::site_t StagedSiteTree::parent_of(site_t site) const {
+    return static_cast<const Node*>(site)->parent;
+}
+
+SiteEnds StagedSiteTree::ends_of(site_t site) const {
+    return static_cast<const Node*>(site)->ends;
+}
+
+const string* StagedSiteTree::id_of(site_t site) const {
+    const Node* node = static_cast<const Node*>(site);
+    return node->id.empty() ? nullptr : &node->id;
 }
 
 }

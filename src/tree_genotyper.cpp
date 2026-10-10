@@ -415,6 +415,7 @@ void TreeGenotyper::fill_tree_fields(const SiteView& view, const SiteChildren& c
     site.leaf = children.entries.empty();
     site.in_chain = true;
     site.chain = parts.child_placer->chain_of(view.net);
+    site.enclosing = view.enclosing;
 }
 
 }

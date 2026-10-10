@@ -44,6 +44,11 @@ public:
 
     /// The boundary visits of `site`.
     virtual SiteEnds ends_of(site_t site) const = 0;
+
+    /// The ID of `site`'s records, where it is not printed from the site's boundary visits, or
+    /// null where it is, as for every site a decomposition holds. A site with an ID of its own is
+    /// matched to its records by that ID.
+    virtual const string* id_of(site_t site) const { return nullptr; }
 };
 
 /// The SiteTree of the snarls a SnarlManager holds. The manager must outlive it.

@@ -34,7 +34,9 @@ and hands them to `MultiPassCaller`:
 `main_call` then sets the caller's options through its setters and calls `MultiPassCaller::call()`
 once. `call()` runs every pass, adds the records to the output's buffer, and writes the anchor
 file and the mosaic. `main_call` finally writes the VCF with `VCFOutputCaller::write_variants`,
-which adds the nesting INFO tags where they are written, sorts the records and writes them.
+which adds the nesting INFO tags where they are written, sorts the records and writes them. The
+tags place each record in the tree of the staged sites (`StagedSiteTree`), each under the sites
+that enclose it in the decomposition.
 
 ## How a run is organised
 

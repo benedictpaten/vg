@@ -2,6 +2,7 @@
 #define VG_STAGED_SITE_HPP_INCLUDED
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -10,6 +11,7 @@
 
 #include "panel_lookup.hpp"
 #include "site_genotyper.hpp"
+#include "site_tree.hpp"
 #include "site_values.hpp"
 #include "snarl_caller.hpp"
 
@@ -71,6 +73,12 @@ struct StagedSite {
     /// site's line is held back when its parent's blocks report its chain.
     ChildChain chain;
     bool in_chain = false;
+    /// The bounds of the sites enclosing this one, innermost first, as the decomposition orients
+    /// them (`SiteView::enclosing`). The nesting INFO tags place the site's records by them
+    /// (`StagedSiteTree`). They are the decomposition's, not the nesting placement's, so a site
+    /// walked as top level, as every site is when all sites are genotyped on their own, still has
+    /// the sites around it.
+    vector<SiteBounds> enclosing;
 
     // Where the site is on the reference.
 
@@ -125,6 +133,43 @@ struct StagedSite {
     const vector<int>& panel_alleles(const PanelLookup& lookup);
     vector<int> panel_cache;
     bool panel_cached = false;
+};
+
+class StagedSiteTable;
+
+/**
+ * The staged sites as a `SiteTree`, from which the VCF's nesting INFO tags are computed. Each
+ * staged site lies under the sites enclosing it, which it keeps itself
+ * (`StagedSite::enclosing`), so that a site the decomposition does not hold is placed as one it
+ * holds is. The tree holds the staged sites and every site enclosing one of them, and a site that
+ * is both appears once.
+ *
+ * A site whose ID is printed from its bounds is matched to its records by its boundary visits, as
+ * a decomposition's sites are; one with an ID of its own is matched by that ID (`id_of`).
+ */
+class StagedSiteTree : public SiteTree {
+public:
+    /// The tree of the sites `sites` holds, in `graph`. `name` prints the ID of a site with the
+    /// given bounds, as the records of a site the decomposition holds are named. None is kept.
+    StagedSiteTree(StagedSiteTable& sites, const HandleGraph& graph,
+                   const function<string(const SiteBounds&)>& name);
+
+    void for_each_site(const function<void(site_t)>& visit, bool in_preorder) const override;
+    site_t parent_of(site_t site) const override;
+    SiteEnds ends_of(site_t site) const override;
+    const string* id_of(site_t site) const override;
+
+private:
+    struct Node {
+        SiteEnds ends;
+        /// The site's ID where it is not printed from `ends`, or empty.
+        string id;
+        /// The site enclosing this one, or null.
+        const Node* parent = nullptr;
+    };
+    /// The sites, each after the site enclosing it, so that in this order the tree is visited in
+    /// preorder. A deque, so that a site's address does not move as sites are added.
+    deque<Node> nodes;
 };
 
 /// Where the passes read what a staged site does not hold, set once by the caller that stages

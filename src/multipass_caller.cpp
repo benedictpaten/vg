@@ -95,6 +95,12 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
     block_records.report();
 }
 
+unique_ptr<SiteTree> MultiPassCaller::site_tree() {
+    return unique_ptr<SiteTree>(new StagedSiteTree(
+        staged_sites, graph,
+        [this](const SiteBounds& site) { return output.print_snarl(&graph, site.start, site.end); }));
+}
+
 string MultiPassCaller::vcf_header(const PathHandleGraph& graph, const vector<string>& contigs,
                                    const vector<size_t>& contig_length_overrides) const {
     return output.snarl_caller_vcf_header(graph, contigs, contig_length_overrides, snarl_caller);

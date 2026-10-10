@@ -86,6 +86,10 @@ public:
     /// passes after it read only what the direct pass kept, not reads.
     void call(GraphCaller::RecurseType recurse_type, const function<void()>& after_direct_pass);
 
+    /// The tree of the sites `call` wrote records for, and of the sites enclosing them, from
+    /// which the output's nesting INFO tags are computed. Valid while this caller exists.
+    unique_ptr<SiteTree> site_tree();
+
     /// Do not genotype a snarl with more edges than this, including those of nested snarls. The
     /// walk then genotypes the snarl's children as if they were top-level snarls. Zero removes the
     /// limit, which is also the default.

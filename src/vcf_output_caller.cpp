@@ -99,8 +99,18 @@ bool VCFOutputCaller::add_variant(vcflib::Variant& var, size_t block) const {
 
 void VCFOutputCaller::write_variants(ostream& out_stream, const SnarlManager* snarl_manager) {
     assert(include_nested == false || snarl_manager != nullptr);
+    if (snarl_manager == nullptr) {
+        write_variants(out_stream, (const SiteTree*)nullptr);
+    } else {
+        const SnarlManagerSiteTree sites(*snarl_manager);
+        write_variants(out_stream, &sites);
+    }
+}
+
+void VCFOutputCaller::write_variants(ostream& out_stream, const SiteTree* sites) {
+    assert(include_nested == false || sites != nullptr);
     if (include_nested) {
-        update_nesting_info_tags(SnarlManagerSiteTree(*snarl_manager));
+        update_nesting_info_tags(*sites);
     }
     vector<pair<BufferedRecordKey, string>> all_variants;
     // Reserve once: doing it inside the loop below reallocates per thread buffer.
@@ -584,12 +594,19 @@ void VCFOutputCaller::scan_snarl(const string& allele_string, function<void(cons
 
 void VCFOutputCaller::update_nesting_info_tags(const SiteTree& sites) {
 
-    // A site's name as print_snarl spells it, and the name it has when read the other way.
+    // A site's name as print_snarl spells it, and the name it has when read the other way. A site
+    // with an ID of its own has that name both ways.
     auto name_of = [&](SiteTree::site_t site) {
+        if (const string* id = sites.id_of(site)) {
+            return *id;
+        }
         const SiteEnds e = sites.ends_of(site);
         return print_snarl(e.start_id, e.start_backward, e.end_id, e.end_backward, false);
     };
     auto flipped_name_of = [&](SiteTree::site_t site) {
+        if (const string* id = sites.id_of(site)) {
+            return *id;
+        }
         const SiteEnds e = sites.ends_of(site);
         return print_snarl(e.end_id, !e.end_backward, e.start_id, !e.start_backward, false);
     };
@@ -733,6 +750,13 @@ void VCFOutputCaller::update_nesting_info_tags(const SiteTree& sites) {
         // The VCF names a snarl matches: its own, then its flipped one (as call sometimes messes
         // with orientation).
         auto for_each_match = [&](SiteTree::site_t snarl, const function<void(const string&)>& match) {
+            if (const string* id = sites.id_of(snarl)) {
+                auto named = chrom_of_name.find(*id);
+                if (named != chrom_of_name.end()) {
+                    match(named->first);
+                }
+                return;
+            }
             const SiteEnds e = sites.ends_of(snarl);
             auto own = name_of_ends.find(Ends{e.start_id, e.end_id, e.start_backward, e.end_backward});
             if (own != name_of_ends.end()) {

@@ -74,6 +74,10 @@ public:
     /// `snarl_manager` is needed if `include_nested` is true.
     void write_variants(ostream& out_stream, const SnarlManager* snarl_manager = nullptr);
 
+    /// `write_variants`, with the nesting INFO tags read from the tree of sites `sites`, which is
+    /// needed if `include_nested` is true.
+    void write_variants(ostream& out_stream, const SiteTree* sites);
+
     /// Run vcffixup from vcflib
     void vcf_fixup(vcflib::Variant& var) const;
 
