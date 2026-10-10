@@ -2951,6 +2951,12 @@ int main_call(int argc, char** argv) {
             logger.info() << label
                           << windowed->get_whole_fetches() << " windows fetched whole, holding "
                           << windowed->get_whole_fetch_reads() << " reads" << endl;
+            if (off_panel) {
+                logger.info() << label << windowed->get_refetches()
+                              << " of the whole fetches were of a window the cache had dropped, and "
+                              << windowed->get_edit_fetches()
+                              << " only to count a window's off-panel candidates" << endl;
+            }
             if (gaf_base != nullptr) {
                 // Each query runs a subprocess, so this count largely determines run time.
                 logger.info() << "GAF-Base: " << gaf_base->get_query_count()

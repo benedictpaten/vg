@@ -360,6 +360,9 @@ WindowedSiteReadSource::get_window(size_t window, bool& was_fetched) const {
         cache_filled.notify_all();
         throw;
     }
+    if (tallied) {
+        ++refetches;
+    }
     // Only this thread can be fetching the window now, so no other thread can tally it first.
     vector<StartTally> tallies;
     if (!tallied) {
@@ -512,6 +515,9 @@ const vector<EditCandidate>& WindowedSiteReadSource::window_edits(size_t window)
     // fetch is published, so once get_window returns it is in, unless the fetch came first.
     bool was_fetched = false;
     shared_ptr<const CacheEntry> entry = get_window(window, was_fetched);
+    if (was_fetched) {
+        ++edit_fetches;
+    }
     {
         lock_guard<std::mutex> guard(cache_mutex);
         auto found = edits.find(window);

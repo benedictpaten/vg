@@ -264,6 +264,10 @@ public:
 
     /// Windows fetched whole, for sites or for read-start tallies, and the reads they held.
     size_t get_whole_fetches() const;
+    /// Of those, the fetches of a window fetched before, which the cache had dropped, and the
+    /// fetches made only to count a window's off-panel candidates.
+    size_t get_refetches() const { return refetches.load(); }
+    size_t get_edit_fetches() const { return edit_fetches.load(); }
     size_t get_whole_fetch_reads() const;
 
     /// Drop every cached window and return how many reads they held. For when calling is done:
@@ -415,6 +419,8 @@ private:
     mutable atomic<size_t> straddle_nodes{0};
     mutable atomic<size_t> straddle_wanted{0};
     mutable atomic<size_t> whole_fetches{0};
+    mutable atomic<size_t> refetches{0};
+    mutable atomic<size_t> edit_fetches{0};
     mutable atomic<size_t> whole_fetch_reads{0};
 
     /// Read-start tallies by window, added when a window is first fetched and kept for the
