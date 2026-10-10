@@ -25,6 +25,7 @@
 #include <htslib/tbx.h>
 
 #include "handle.hpp"
+#include "off_panel.hpp"
 #include "stream_index.hpp"
 
 namespace vg {
@@ -112,6 +113,20 @@ public:
     /// the backend cannot cheaply say.
     virtual size_t get_read_count() const = 0;
 
+    /// Turn on off-panel detection (see `count_snv_edits`): from now on, the reads are counted
+    /// for substitutions on `graph`, which must outlive this, each read once, while they are in
+    /// memory. Call before any query. A source that cannot count finds no candidates.
+    virtual void count_edits(const HandleGraph* graph, const EditCountParams& params) {}
+
+    /// Visit the off-panel candidates on the nodes `nodes`, which are sorted and free of
+    /// duplicates, in order. A node's candidates are always all of them: reads not yet counted
+    /// are fetched and counted first. Nothing is visited unless `count_edits` was called.
+    virtual void for_each_edit_candidate(
+        const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {}
+
+    /// Every off-panel candidate counted so far, sorted.
+    virtual vector<EditCandidate> counted_edit_candidates() const { return {}; }
+
 };
 
 /**
@@ -150,11 +165,24 @@ public:
     /// How many reads the filter rejected, for logging.
     size_t get_filtered_count() const;
 
+    /// Every read is in memory, so all of them are counted at once, at the first query.
+    void count_edits(const HandleGraph* graph, const EditCountParams& params);
+    void for_each_edit_candidate(const vector<nid_t>& nodes,
+                                 const function<void(const EditCandidate&)>& iteratee) const;
+    vector<EditCandidate> counted_edit_candidates() const;
+
 private:
 
     /// Retain a read if it passes the filter, indexing it by every node it
     /// touches. Not safe to call concurrently; loading is single-threaded.
     void add_read(const Alignment& aln, const Filter& filter);
+
+    /// The candidates of all the reads, counted once, at the first query.
+    const vector<EditCandidate>& all_edits() const;
+    const HandleGraph* edit_graph = nullptr;
+    EditCountParams edit_params;
+    mutable std::once_flag edits_counted;
+    mutable vector<EditCandidate> edits;
 
     /// The reads themselves, owned here and referenced by index below.
     vector<Alignment> reads;
@@ -197,6 +225,14 @@ public:
     /// Reads actually fetched from the backend so far, across all threads. Not the
     /// size of the read set, which an on-demand backend never knows.
     size_t get_read_count() const;
+
+    /// Each window's reads are counted the first time the window is fetched, before the fetch is
+    /// published, and only on the window's own nodes, so each read base is counted once however
+    /// often its window is fetched. The candidates are kept for the whole run.
+    void count_edits(const HandleGraph* graph, const EditCountParams& params) final;
+    void for_each_edit_candidate(const vector<nid_t>& nodes,
+                                 const function<void(const EditCandidate&)>& iteratee) const final;
+    vector<EditCandidate> counted_edit_candidates() const final;
 
     size_t get_filtered_count() const;
 
@@ -377,7 +413,15 @@ private:
     /// whole run.
     mutable unordered_map<size_t, vector<StartTally>> starts;
 
-    /// Guards `cache`, `cache_clock` and `starts`. Fetches run without it.
+    /// Off-panel detection: the graph the reads are counted on, or null when it is off, and the
+    /// candidates by window, added when a window is first fetched and kept for the whole run.
+    const HandleGraph* edit_graph = nullptr;
+    EditCountParams edit_params;
+    mutable unordered_map<size_t, vector<EditCandidate>> edits;
+    /// The candidates of the window, fetching it if it has never been fetched.
+    const vector<EditCandidate>& window_edits(size_t window) const;
+
+    /// Guards `cache`, `cache_clock`, `starts` and `edits`. Fetches run without it.
     mutable std::mutex cache_mutex;
     /// Signalled when a fetch finishes or fails.
     mutable std::condition_variable cache_filled;

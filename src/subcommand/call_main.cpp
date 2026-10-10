@@ -193,6 +193,11 @@ void help_call(char** argv) {
          << "      --no-phased           write unphased genotypes, without FORMAT/PS" << endl
          << "      --phased              write phased genotypes, failing if the linkage" << endl
          << "                            model cannot run [on when the linkage model runs]" << endl
+         << "  off-panel variants:" << endl
+         << "      --off-panel           also call SNVs that no graph walk spells, found as" << endl
+         << "                            mismatches recurring in the reads (experimental)" << endl
+         << "      --off-panel-dump FILE write each off-panel candidate, with its read counts" << endl
+         << "                            and what became of it, to FILE as TSV" << endl
          << "  read-based phasing (reliable heterozygous sites are joined into a phase" << endl
          << "  chain by the reads they share; other sites are phased from the chain):" << endl
          << "      --read-phasing        phase heterozygous sites with the reads that span" << endl
@@ -463,6 +468,9 @@ int main_call(int argc, char** argv) {
     // later one follows a correction from the read phase and chooses them again.
     size_t regenotype_passes = 2;
     string regenotype_ledger;
+    // Off-panel detection, and where to write its candidates.
+    bool off_panel = false;
+    string off_panel_dump;
     ReadPhasingParams read_phasing_params;
     // The preset is applied after all options are parsed. The *_explicit flags record which of its
     // settings were given explicitly, and those keep their given values.
@@ -544,6 +552,8 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_HP_PRIOR = 1110;
     constexpr int OPT_HP_PRIOR_RUN = 1111;
     constexpr int OPT_LINKAGE_MUTATION = 1113;
+    constexpr int OPT_OFF_PANEL = 1114;
+    constexpr int OPT_OFF_PANEL_DUMP = 1115;
     constexpr int OPT_DEPTH_TERM = 1025;
     constexpr int OPT_DEPTH_COUNT_RAW = 1026;
     constexpr int OPT_DEPTH_QUALITY = 1027;
@@ -681,6 +691,7 @@ int main_call(int argc, char** argv) {
             {"linkage-scale", required_argument, 0, OPT_LINKAGE_SCALE},
             {"linkage-prior", required_argument, 0, OPT_LINKAGE_FREQ_PRIOR},
             {"linkage-mutation", required_argument, 0, OPT_LINKAGE_MUTATION},
+            {"off-panel", no_argument, 0, OPT_OFF_PANEL},
             {"hp-prior", required_argument, 0, OPT_HP_PRIOR},
             {"hp-prior-run", required_argument, 0, OPT_HP_PRIOR_RUN},
             {"enumerate-support", no_argument, 0, OPT_ENUMERATE_SUPPORT},
@@ -698,6 +709,9 @@ int main_call(int argc, char** argv) {
             {"gbz-base", required_argument, 0, OPT_GBZ_BASE},
             {"gaf-base-binary", required_argument, 0, OPT_GAF_BASE_BINARY},
             {"read-window", required_argument, 0, OPT_READ_WINDOW},
+        }},
+        {"off-panel", {  // need --off-panel
+            {"off-panel-dump", required_argument, 0, OPT_OFF_PANEL_DUMP},
         }},
         {"anchors", {  // need --anchors-out
             {"no-off-ref-nesting", no_argument, 0, OPT_NO_OFF_REF_NESTING},
@@ -1055,6 +1069,12 @@ int main_call(int argc, char** argv) {
             break;
         case OPT_REGENO_LEDGER:
             regenotype_ledger = optarg;
+            break;
+        case OPT_OFF_PANEL:
+            off_panel = true;
+            break;
+        case OPT_OFF_PANEL_DUMP:
+            off_panel_dump = optarg;
             break;
         case OPT_GAP_EXTEND:
             gap_extend_explicit = true;
@@ -1561,7 +1581,8 @@ int main_call(int argc, char** argv) {
         };
         const SubsystemCheck checks[] = {
             {"--read-likelihood", "to", read_likelihood,
-             {"read-likelihood", "anchors", "mosaic", "regenotype"}},
+             {"read-likelihood", "anchors", "mosaic", "regenotype", "off-panel"}},
+            {"--off-panel", "with", off_panel, {"off-panel"}},
             {"--anchors-out", "with", !anchors_out.empty(), {"anchors"}},
             {"--mosaic-out", "with", !mosaic_out.empty(), {"mosaic"}},
             // A preset can turn --regenotype on and --no-read-phasing then turns it off again
@@ -2797,6 +2818,11 @@ int main_call(int argc, char** argv) {
         }
         if (multipass_caller != nullptr) {
             multipass_caller->set_read_phasing(read_phasing, read_phasing_params);
+            if (off_panel) {
+                // The reads are counted as they are fetched, from the first site on.
+                read_source->count_edits(graph, EditCountParams());
+                multipass_caller->set_off_panel(read_source.get(), off_panel_dump);
+            }
             multipass_caller->set_regenotype(regenotype, regenotype_params, regenotype_passes,
                                              regenotype_ledger);
         }

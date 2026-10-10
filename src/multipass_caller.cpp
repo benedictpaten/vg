@@ -1,4 +1,5 @@
 #include <atomic>
+#include <fstream>
 #include <limits>
 
 #include <omp.h>
@@ -87,12 +88,61 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
 
     // The reports, and the mosaic, need to know which sites have a line, so they come last.
     finalise_linkage_outputs();
+    write_edit_dump();
     if (phase_declined.load() > 0 || quality_declined.load() > 0) {
         cerr << "[vg call] linkage: " << phase_declined.load()
              << " phases refused by the record they were rendered onto, and "
              << quality_declined.load() << " quality rewrites refused" << endl;
     }
     block_records.report();
+}
+
+pair<string, int64_t> MultiPassCaller::reference_position(nid_t node, uint32_t offset) const {
+    pair<string, int64_t> found;
+    const handle_t handle = graph.get_handle(node);
+    graph.for_each_step_on_handle(handle, [&](const step_handle_t& step) {
+        const string path_name = graph.get_path_name(graph.get_path_handle_of_step(step));
+        if (!ref_path_set.count(path_name)) {
+            return true;
+        }
+        const size_t len = graph.get_length(handle);
+        const bool reverse = graph.get_is_reverse(graph.get_handle_of_step(step));
+        const int64_t along = (int64_t)graph.get_position_of_step(step)
+                              + (int64_t)(reverse ? len - 1 - offset : offset)
+                              + ref_offset_of(ref_offsets, path_name);
+        string contig = PathMetadata::parse_locus_name(Paths::strip_subrange(path_name));
+        found = make_pair(contig == PathMetadata::NO_LOCUS_NAME ? Paths::strip_subrange(path_name)
+                                                                : contig,
+                          base_path_position(path_name, along));
+        return false;
+    });
+    return found;
+}
+
+void MultiPassCaller::write_edit_dump() const {
+    if (edit_source == nullptr || edit_dump.empty()) {
+        return;
+    }
+    ofstream out(edit_dump);
+    if (!out) {
+        cerr << "error [vg call]: could not open " << edit_dump << " for the off-panel dump" << endl;
+        return;
+    }
+    out << "#contig\tpos\tnode\toffset\tref\talt\talt_frags\tref_frags\tother_frags"
+           "\tdiscordant_frags\taf\tmean_alt_mapq\n";
+    for (const EditCandidate& c : edit_source->counted_edit_candidates()) {
+        const pair<string, int64_t> at = reference_position(c.node, c.offset);
+        out << (at.first.empty() ? "." : at.first) << "\t";
+        if (at.first.empty()) {
+            out << ".";
+        } else {
+            out << at.second;
+        }
+        out << "\t" << c.node << "\t" << c.offset << "\t" << c.ref << "\t" << c.alt << "\t"
+            << c.alt_fragments << "\t" << c.ref_fragments << "\t" << c.other_fragments << "\t"
+            << c.discordant_fragments << "\t" << c.fraction() << "\t" << c.mean_alt_mapq
+            << "\n";
+    }
 }
 
 unique_ptr<SiteTree> MultiPassCaller::site_tree() {

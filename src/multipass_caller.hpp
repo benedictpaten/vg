@@ -164,6 +164,14 @@ public:
         rescorer.configure(on, params, passes, ledger);
     }
 
+    /// Turn on off-panel detection: `reads` counts each read's substitutions as it fetches them
+    /// (see `SiteReadSource::count_edits`). With a `dump` path, every candidate is written there
+    /// at the end.
+    void set_off_panel(const SiteReadSource* reads, const string& dump) {
+        edit_source = reads;
+        edit_dump = dump;
+    }
+
     /// Where and how to write the mosaic. A path turns phasing on.
     void set_mosaic_out(MosaicParams params) {
         if (!params.path.empty()) {
@@ -212,6 +220,15 @@ private:
 
     /// Configure the widgets of the passes with what they read from this caller.
     void install_widgets();
+
+    /// Off-panel detection's read source, or null when it is off, and where to write its dump.
+    const SiteReadSource* edit_source = nullptr;
+    string edit_dump;
+    /// Write every off-panel candidate to `edit_dump`, if it is set.
+    void write_edit_dump() const;
+    /// Where a node's base lies on the reference: the contig and the 1-based position of the base
+    /// at forward offset `offset`, or an empty contig when no reference path visits the node.
+    pair<string, int64_t> reference_position(nid_t node, uint32_t offset) const;
 
     /// Report what nested descent did: the depth histogram, and how many children it skipped and
     /// why. Does nothing in a run without nested descent.

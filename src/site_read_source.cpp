@@ -157,6 +157,37 @@ size_t InMemorySiteReadSource::get_filtered_count() const {
     return filtered_count;
 }
 
+void InMemorySiteReadSource::count_edits(const HandleGraph* graph, const EditCountParams& params) {
+    edit_graph = graph;
+    edit_params = params;
+}
+
+const vector<EditCandidate>& InMemorySiteReadSource::all_edits() const {
+    std::call_once(edits_counted, [&]() {
+        if (edit_graph == nullptr) {
+            return;
+        }
+        edits = count_snv_edits(
+            *edit_graph,
+            [&](const function<void(const Alignment&)>& visit) {
+                for (const Alignment& aln : reads) {
+                    visit(aln);
+                }
+            },
+            [](nid_t) { return true; }, edit_params);
+    });
+    return edits;
+}
+
+void InMemorySiteReadSource::for_each_edit_candidate(
+    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {
+    for_each_candidate_on(all_edits(), nodes, iteratee);
+}
+
+vector<EditCandidate> InMemorySiteReadSource::counted_edit_candidates() const {
+    return all_edits();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WindowedSiteReadSource
 ////////////////////////////////////////////////////////////////////////////////
@@ -311,11 +342,13 @@ WindowedSiteReadSource::get_window(size_t window, bool& was_fetched) const {
 
     shared_ptr<CacheEntry> entry;
     bool tallied = false;
+    bool edits_counted = true;
     try {
         entry = make_shared<CacheEntry>(load_window(window));
         {
             lock_guard<std::mutex> guard(cache_mutex);
             tallied = starts.count(window) > 0;
+            edits_counted = edit_graph == nullptr || edits.count(window) > 0;
         }
     } catch (...) {
         // Release the claim, so that a thread waiting on this window fetches it itself rather
@@ -330,6 +363,19 @@ WindowedSiteReadSource::get_window(size_t window, bool& was_fetched) const {
     if (!tallied) {
         tallies = tally_starts(*entry);
     }
+    // Likewise the off-panel candidates, on the window's own nodes only, since a read that reaches
+    // into another window is fetched with that window too.
+    vector<EditCandidate> window_candidates;
+    if (!edits_counted) {
+        window_candidates = count_snv_edits(
+            *edit_graph,
+            [&](const function<void(const Alignment&)>& visit) {
+                for (const Alignment& aln : entry->reads) {
+                    visit(aln);
+                }
+            },
+            [&](nid_t node) { return window_of(node) == window; }, edit_params);
+    }
     was_fetched = true;
 
     // Windows dropped from the cache are freed here, after the lock is released: freeing a
@@ -338,6 +384,9 @@ WindowedSiteReadSource::get_window(size_t window, bool& was_fetched) const {
     lock_guard<std::mutex> guard(cache_mutex);
     if (!tallied) {
         starts.emplace(window, std::move(tallies));
+    }
+    if (!edits_counted) {
+        edits.emplace(window, std::move(window_candidates));
     }
     CacheSlot& slot = cache[window];
     slot.entry = entry;
@@ -441,6 +490,72 @@ WindowedSiteReadSource::window_starts(size_t window) const {
     get_window(window, was_fetched);
     lock_guard<std::mutex> guard(cache_mutex);
     return starts.at(window);
+}
+
+void WindowedSiteReadSource::count_edits(const HandleGraph* graph,
+                                         const EditCountParams& params) {
+    edit_graph = graph;
+    edit_params = params;
+}
+
+const vector<EditCandidate>& WindowedSiteReadSource::window_edits(size_t window) const {
+    {
+        lock_guard<std::mutex> guard(cache_mutex);
+        auto found = edits.find(window);
+        if (found != edits.end()) {
+            return found->second;
+        }
+    }
+    // Never fetched, or fetched before counting was turned on. A window is counted before its
+    // fetch is published, so once get_window returns it is in, unless the fetch came first.
+    bool was_fetched = false;
+    shared_ptr<const CacheEntry> entry = get_window(window, was_fetched);
+    {
+        lock_guard<std::mutex> guard(cache_mutex);
+        auto found = edits.find(window);
+        if (found != edits.end()) {
+            return found->second;
+        }
+    }
+    vector<EditCandidate> counted = count_snv_edits(
+        *edit_graph,
+        [&](const function<void(const Alignment&)>& visit) {
+            for (const Alignment& aln : entry->reads) {
+                visit(aln);
+            }
+        },
+        [&](nid_t node) { return window_of(node) == window; }, edit_params);
+    lock_guard<std::mutex> guard(cache_mutex);
+    return edits.emplace(window, std::move(counted)).first->second;
+}
+
+void WindowedSiteReadSource::for_each_edit_candidate(
+    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {
+    if (edit_graph == nullptr) {
+        return;
+    }
+    size_t i = 0;
+    while (i < nodes.size()) {
+        // The nodes are sorted, so each window's nodes are consecutive.
+        const size_t window = window_of(nodes[i]);
+        size_t j = i;
+        while (j < nodes.size() && window_of(nodes[j]) == window) {
+            ++j;
+        }
+        const vector<nid_t> in_window(nodes.begin() + i, nodes.begin() + j);
+        for_each_candidate_on(window_edits(window), in_window, iteratee);
+        i = j;
+    }
+}
+
+vector<EditCandidate> WindowedSiteReadSource::counted_edit_candidates() const {
+    vector<EditCandidate> all;
+    lock_guard<std::mutex> guard(cache_mutex);
+    for (const auto& window : edits) {
+        all.insert(all.end(), window.second.begin(), window.second.end());
+    }
+    std::sort(all.begin(), all.end());
+    return all;
 }
 
 void WindowedSiteReadSource::for_each_read_start(
