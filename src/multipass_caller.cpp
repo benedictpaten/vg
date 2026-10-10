@@ -173,6 +173,14 @@ VCFOutputCaller::SiteRecordSteps MultiPassCaller::record_steps(const StagedSite&
     steps.finish_record = [this](vcflib::Variant& record) {
         finish_moved_record(record);
     };
+    // A written allele's scored allele is its traversal, since the site's walks are the ones it
+    // was scored with, in order. Two alleles can share a walk when one has step sequences, so
+    // they are told apart by index rather than by walk.
+    steps.fill_info = [this, &site](const vector<int>& site_trav, const vector<int>& site_genotype,
+                                    vcflib::Variant& variant) {
+        snarl_caller.write_vcf_fields(site_trav, site_genotype, site.call_info.get(), sample_name,
+                                      variant);
+    };
     // The linkage model gets the site whether or not it has a line. A parent written as the
     // reference still has two alleles, which differ only inside its children, and the children
     // need them to know which strand carries the chain. In VCF allele numbering such a parent is
@@ -258,12 +266,8 @@ void MultiPassCaller::install_widgets() {
     const SiteReader reader{
         .graph = &graph,
         .genotyper = &site_genotyper,
-        .spell = [this](const Traversal& walk) {
-            string sequence;
-            for (const handle_t& handle : walk) {
-                sequence += graph.get_sequence(handle);
-            }
-            return sequence;
+        .spell = [this](const Traversal& walk, const StepSequences* own) {
+            return allele_sequence(graph, walk, own);
         },
     };
     linker.set_site_reader(reader);
@@ -387,7 +391,14 @@ void MultiPassCaller::render_retained_records() {
                                 snarl_traversals_of(graph, site.travs), genotype,
                                 site.ref_trav_idx, site.call_info, site.ref_path_name,
                                 site.ref_offset, genotype_snarls, site.ploidy,
-                                record_steps(site));
+                                record_steps(site),
+                                // Each allele is spelled as the site holds it: by its step
+                                // sequences where it has them, or else by its walk.
+                                [&](const vector<SnarlTraversal>&, const vector<int>&, int trav,
+                                    int, int) {
+                                    return allele_sequence(graph, site.travs[trav],
+                                                           own_sequences(&site.sequences, trav));
+                                });
         },
         show_progress);
 }
@@ -626,6 +637,12 @@ bool MultiPassCaller::is_symbolically_reference(const StagedSite& site, int trav
     // Only with nested calling.
     if (!nested_calling || ref_trav_idx < 0 || trav_idx < 0 ||
         ref_trav_idx >= (int)site.travs.size() || trav_idx >= (int)site.travs.size()) {
+        return false;
+    }
+    // An allele with step sequences spells something its walk does not, so sharing the
+    // reference's route does not make it the reference.
+    if (own_sequences(&site.sequences, trav_idx) != nullptr
+        || own_sequences(&site.sequences, ref_trav_idx) != nullptr) {
         return false;
     }
     return symbolically_equal(graph, site.travs[trav_idx], site.travs[ref_trav_idx],

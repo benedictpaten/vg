@@ -27,7 +27,8 @@ public:
     explicit SiteGenotyper(ReadLikelihoodSnarlCaller& genotyper);
 
     /// Genotype `site`, whose candidate alleles are the walks `travs`, the reference among them
-    /// at `ref_trav_idx`, at `ploidies`. `enclosing` holds the bounds of the sites enclosing it,
+    /// at `ref_trav_idx`, at `ploidies`. An allele with step sequences in `sequences` is spelled
+    /// by them rather than by its walk. `enclosing` holds the bounds of the sites enclosing it,
     /// innermost first. The genotype is a sorted multiset of indices into `travs`, empty where the
     /// site cannot be genotyped. The score is never null.
     pair<vector<int>, unique_ptr<SiteScore>> genotype(const SiteBounds& site,
@@ -35,7 +36,9 @@ public:
                                                       int ref_trav_idx, const Ploidies& ploidies,
                                                       const vector<SiteBounds>& enclosing,
                                                       const string& ref_path_name,
-                                                      pair<size_t, size_t> ref_range) const;
+                                                      pair<size_t, size_t> ref_range,
+                                                      const AlleleSequences* sequences
+                                                      = nullptr) const;
 
     /// The factor GQ is the gap times, at the called genotype: the explained share, when the
     /// share discount is on, times the depth discount.

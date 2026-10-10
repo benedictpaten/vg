@@ -59,6 +59,9 @@ struct StagedSite {
     /// turned round.
     SiteBounds bounds;
     vector<Traversal> travs;
+    /// The sequences of the alleles in `travs` that their walks do not spell; empty for a site
+    /// the decomposition holds.
+    AlleleSequences sequences;
     int ref_trav_idx = -1;
     /// The sites nested in this one, for its symbolic alleles.
     SiteChildren children;
@@ -116,7 +119,7 @@ struct StagedSite {
     /// back in the next.
     bool dropped = false;
 
-    /// `lookup.alleles(travs)`, computed on the first call and kept: the traversals do not change
+    /// `lookup.alleles(travs, &sequences)`, computed on the first call and kept: the traversals do not change
     /// after the direct pass, and each re-genotyping round would otherwise repeat the GBWT
     /// lookups. The direct pass can fill `panel_cache` first.
     const vector<int>& panel_alleles(const PanelLookup& lookup);
@@ -131,8 +134,8 @@ struct SiteReader {
     const PathPositionHandleGraph* graph = nullptr;
     /// The read-likelihood genotyper that called the sites, or null where another genotyper did.
     const SiteGenotyper* genotyper = nullptr;
-    /// A walk's sequence.
-    function<string(const Traversal&)> spell;
+    /// An allele's sequence: its step sequences when not null, or else its walk's.
+    function<string(const Traversal& walk, const StepSequences* own)> spell;
 };
 
 /**

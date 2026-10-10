@@ -430,11 +430,13 @@ public:
     /// alleles cross, since the reads counted near the site come from all of them.
     /// Nothing in the matrix depends on the ploidy the site is then genotyped at. `enclosing`
     /// holds the bounds of the sites enclosing `site`, innermost first; they place a site whose
-    /// own bounds are off the reference.
+    /// own bounds are off the reference. An allele with step sequences in `sequences` is scored
+    /// against them rather than against its walk's nodes.
     virtual AlleleReadLikelihoods compute(const SiteBounds& site,
                                           const vector<Traversal>& traversals,
                                           const vector<SiteBounds>& enclosing,
-                                          int region_ploidy) = 0;
+                                          int region_ploidy,
+                                          const AlleleSequences* sequences = nullptr) = 0;
 };
 
 /**
@@ -499,7 +501,8 @@ public:
     AlleleReadLikelihoods compute(const SiteBounds& site,
                                   const vector<Traversal>& traversals,
                                   const vector<SiteBounds>& enclosing,
-                                  int region_ploidy) override;
+                                  int region_ploidy,
+                                  const AlleleSequences* sequences = nullptr) override;
 
     /// Place rate windows on these reference paths of `position_graph`, which must be the
     /// graph the calculator was built on, or a view of it with the same nodes. Until this is
@@ -525,6 +528,10 @@ protected:
         nid_t node_id;
         bool backward;
         string sequence;
+        /// Whether `sequence` is the allele's own step sequence and differs from the node's
+        /// (see `StepSequences`). A read's visit to the node is then scored against it, not
+        /// against the node through the read's alignment (see `score_shared_node`).
+        bool own_sequence = false;
     };
 
     /// One node visit by a read inside the site, tied back to its mapping.
@@ -538,9 +545,11 @@ protected:
         const Mapping* mapping;
     };
 
-    /// Materialise an allele's node visits and sequences. Per allele, not per
-    /// (read, allele), so cheap enough to do once per site.
-    vector<AlleleStep> get_allele_steps(const Traversal& walk) const;
+    /// Materialise an allele's node visits and sequences: its step sequences `own` when not
+    /// null, or else its nodes'. Per allele, not per (read, allele), so cheap enough to do once
+    /// per site.
+    vector<AlleleStep> get_allele_steps(const Traversal& walk,
+                                        const StepSequences* own = nullptr) const;
 
     /// Extract the read's visits inside the site, in read order. Returns false if the
     /// read cannot tell the alleles apart because it lies within one boundary node,
@@ -560,8 +569,15 @@ protected:
     /// Score the read's own edits on a node the read and the allele share.
     /// `nat_adjust` accumulates real-valued corrections that cannot be expressed in the
     /// integer score; the caller adds it after converting the score to nats.
+    ///
+    /// Where `allele_step` has its own sequence, the read's bases are compared with that
+    /// sequence instead of with the node's: each aligned base of the read against the step
+    /// sequence's base at the same offset in the node, and each gap of the alignment charged as
+    /// it is. The offsets are the node's, so a step sequence that changes the node's length is
+    /// compared correctly only up to the change.
     int32_t score_shared_node(const Alignment& aln, const ReadStep& step,
-                              const EditAlignmentScorer& read_scorer, double& nat_adjust) const;
+                              const EditAlignmentScorer& read_scorer, double& nat_adjust,
+                              const AlleleStep* allele_step = nullptr) const;
 
     /// Score `length` of the read's own bases, from `read_offset`, against as many
     /// allele bases, from `allele_offset`, base by base, charging each mismatch at

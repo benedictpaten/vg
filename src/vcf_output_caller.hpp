@@ -135,6 +135,10 @@ public:
                      bool genotype_snarls)> write_blocks;
         /// Changes the finished site record just before it is added to the output.
         function<void(vcflib::Variant& record)> finish_record;
+        /// Adds the caller's INFO and FORMAT fields, as `SiteHooks::fill_info` does, in place of
+        /// the snarl caller's `update_vcf_info`.
+        function<void(const vector<int>& site_trav, const vector<int>& site_genotype,
+                      vcflib::Variant& variant)> fill_info;
         /// Told, once the site is filed, the VCF allele of each of its `traversal_count`
         /// traversals that is in its genotype, and whether the site has a line.
         function<void(const Snarl& site, const map<int, int>& trav_to_allele,

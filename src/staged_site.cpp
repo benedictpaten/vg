@@ -38,7 +38,7 @@ unique_ptr<SiteScore> StagedSite::take_score() {
 
 const vector<int>& StagedSite::panel_alleles(const PanelLookup& lookup) {
     if (!panel_cached) {
-        panel_cache = lookup.alleles(travs);
+        panel_cache = lookup.alleles(travs, &sequences);
         panel_cached = true;
     }
     return panel_cache;

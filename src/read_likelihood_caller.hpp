@@ -179,13 +179,15 @@ public:
     };
 
     /// Genotype the site `site`, whose candidate alleles are the walks `traversals`, at
-    /// `ploidies`. `enclosing` holds the bounds of the sites enclosing it, innermost first. The
+    /// `ploidies`. An allele with step sequences in `sequences` is spelled by them rather than by
+    /// its walk. `enclosing` holds the bounds of the sites enclosing it, innermost first. The
     /// genotype is a multiset of indices into `traversals`, sorted; it is empty where the site
     /// cannot be genotyped. The score is never null.
     pair<vector<int>, unique_ptr<ReadLikelihoodCallInfo>> genotype_at(
         const SiteBounds& site, const vector<Traversal>& traversals, int ref_trav_idx,
         const Ploidies& ploidies, const vector<SiteBounds>& enclosing,
-        const string& ref_path_name, pair<size_t, size_t> ref_range);
+        const string& ref_path_name, pair<size_t, size_t> ref_range,
+        const AlleleSequences* sequences = nullptr);
 
     /// Throws. `SnarlCaller` requires it, but this genotyper's one user, MultiPassCaller, calls
     /// `genotype_at`; no `GraphCaller` holds it.
@@ -196,12 +198,22 @@ public:
                                                              const string& ref_path_name,
                                                              pair<size_t, size_t> ref_range);
 
+    /// Write the record's fields from the scores, mapping each of the written `traversals` to
+    /// the scored allele with the same walk (see `write_vcf_fields`).
     virtual void update_vcf_info(const Snarl& snarl,
                                  const vector<SnarlTraversal>& traversals,
                                  const vector<int>& genotype,
                                  const unique_ptr<CallInfo>& call_info,
                                  const string& sample_name,
                                  vcflib::Variant& variant);
+
+    /// Write the record's fields from the scores in `call_info`: DP, BL, DR, AD, GL and the rest.
+    /// `scored_allele` gives, for each written allele, the index of the scored allele it is, or
+    /// -1 for one that was not scored, such as a star allele. `genotype` is in written alleles.
+    /// Does nothing when `call_info` is not this genotyper's.
+    void write_vcf_fields(const vector<int>& scored_allele, const vector<int>& genotype,
+                          const CallInfo* call_info, const string& sample_name,
+                          vcflib::Variant& variant) const;
 
     virtual void update_vcf_header(string& header) const;
 

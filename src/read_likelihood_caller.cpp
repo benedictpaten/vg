@@ -106,7 +106,8 @@ ReadLikelihoodSnarlCaller::genotype_at(const SiteBounds& site,
                                        const Ploidies& ploidies,
                                        const vector<SiteBounds>& enclosing,
                                        const string& ref_path_name,
-                                       pair<size_t, size_t> ref_range) {
+                                       pair<size_t, size_t> ref_range,
+                                       const AlleleSequences* sequences) {
     const int ploidy = ploidies.ploidy;
     ReadLikelihoodCallInfo* call_info = new ReadLikelihoodCallInfo();
     call_info->ploidy = ploidy;
@@ -119,7 +120,7 @@ ReadLikelihoodSnarlCaller::genotype_at(const SiteBounds& site,
     // Build the reads x alleles matrix for this site.
     AlleleReadLikelihoods matrix = likelihood_calculator.compute(
         site, traversals, enclosing,
-        ploidies.region_ploidy > 0 ? ploidies.region_ploidy : ploidy);
+        ploidies.region_ploidy > 0 ? ploidies.region_ploidy : ploidy, sequences);
 
     // Per-allele read support and mean absolute fit. Neither enters the genotype likelihood;
     // both are written to the VCF, as AD and BL.
@@ -375,9 +376,34 @@ void ReadLikelihoodSnarlCaller::update_vcf_info(const Snarl& snarl,
                                                const unique_ptr<CallInfo>& call_info,
                                                const string& sample_name,
                                                vcflib::Variant& variant) {
-
     const ReadLikelihoodCallInfo* info =
         dynamic_cast<const ReadLikelihoodCallInfo*>(call_info.get());
+    if (info == nullptr) {
+        return;
+    }
+    // Map each emitted VCF allele back to the matrix column it came from.
+    //
+    // emit_variant merged alleles with the same sequence and dropped uncalled ones, so
+    // these indices are not the ones we genotyped. Traversals that match nothing, such as
+    // the empty traversal of a star allele, stay unmapped.
+    vector<int> site_to_scored(traversals.size(), -1);
+    for (size_t s = 0; s < traversals.size(); ++s) {
+        for (size_t k = 0; k < info->scored_traversals.size(); ++k) {
+            if (same_walk(graph, traversals[s], info->scored_traversals[k])) {
+                site_to_scored[s] = (int)k;
+                break;
+            }
+        }
+    }
+    write_vcf_fields(site_to_scored, genotype, info, sample_name, variant);
+}
+
+void ReadLikelihoodSnarlCaller::write_vcf_fields(const vector<int>& site_to_scored,
+                                                 const vector<int>& genotype,
+                                                 const CallInfo* call_info,
+                                                 const string& sample_name,
+                                                 vcflib::Variant& variant) const {
+    const ReadLikelihoodCallInfo* info = dynamic_cast<const ReadLikelihoodCallInfo*>(call_info);
     if (info == nullptr) {
         // A genotype derived from a parent site rather than scored here (nested
         // calling does this). There is no matrix to report.
@@ -397,20 +423,6 @@ void ReadLikelihoodSnarlCaller::update_vcf_info(const Snarl& snarl,
         variant.samples[sample_name]["BL"].push_back(ss.str());
     }
 
-    // Map each emitted VCF allele back to the matrix column it came from.
-    //
-    // emit_variant merged alleles with the same sequence and dropped uncalled ones, so
-    // these indices are not the ones we genotyped. Traversals that match nothing, such as
-    // the empty traversal of a star allele, stay unmapped.
-    vector<int> site_to_scored(traversals.size(), -1);
-    for (size_t s = 0; s < traversals.size(); ++s) {
-        for (size_t k = 0; k < info->scored_traversals.size(); ++k) {
-            if (same_walk(graph, traversals[s], info->scored_traversals[k])) {
-                site_to_scored[s] = (int)k;
-                break;
-            }
-        }
-    }
 
     // Observed reads over what the written genotype predicts, written whether or not the depth
     // term is on. The written genotype is the direct call's unless the linkage model moved the
@@ -451,8 +463,8 @@ void ReadLikelihoodSnarlCaller::update_vcf_info(const Snarl& snarl,
     // with no scored column, such as a star allele, gets 0, since AD needs one entry per
     // allele.
     {
-        vector<long> ad(traversals.size(), 0);
-        for (size_t s = 0; s < traversals.size(); ++s) {
+        vector<long> ad(site_to_scored.size(), 0);
+        for (size_t s = 0; s < site_to_scored.size(); ++s) {
             int k = site_to_scored[s];
             if (k >= 0 && (size_t)k < info->allele_support.size()) {
                 ad[s] = lround(info->allele_support[k]);
@@ -467,7 +479,7 @@ void ReadLikelihoodSnarlCaller::update_vcf_info(const Snarl& snarl,
     // GL over the emitted alleles, in VCF genotype order: one entry per genotype of the
     // emitted alleles, looked up in the genotypes we scored.
     bool all_mapped = true;
-    for (size_t s = 0; s < traversals.size(); ++s) {
+    for (size_t s = 0; s < site_to_scored.size(); ++s) {
         if (site_to_scored[s] < 0) {
             all_mapped = false;
             break;
@@ -485,7 +497,7 @@ void ReadLikelihoodSnarlCaller::update_vcf_info(const Snarl& snarl,
         bool complete = true;
 
         for (auto& site_genotype :
-             AlleleReadLikelihoods::enumerate_genotypes(traversals.size(), info->ploidy)) {
+             AlleleReadLikelihoods::enumerate_genotypes(site_to_scored.size(), info->ploidy)) {
             // Translate to matrix columns and sort, since genotype_lls is keyed
             // by the sorted multiset.
             vector<int> scored_genotype;

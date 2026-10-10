@@ -747,6 +747,57 @@ TEST_CASE("A read over the SNP discriminates between the two SNP alleles",
     REQUIRE(scored[best].first == vector<int>({0, 1}));
 }
 
+TEST_CASE("An allele with step sequences is scored against them, though it shares the reference's walk",
+          "[allele_likelihood][scoring]") {
+    SnpAndDeletionSite site;
+    // The reference, and the SNP's G given on the reference's walk as step sequences, rather
+    // than through node 3.
+    const Traversal ref_walk = walk_of(site.graph, site.traversals[0]);
+    const vector<Traversal> walks{ref_walk, ref_walk};
+    const AlleleSequences sequences{{}, {"AAAACCCC", "G", "GGGGTTTT"}};
+
+    // A read of the reference, and a read along the same nodes with a G where node 2 has a T.
+    Alignment ref_read = make_matching_alignment(site.graph, "ref", {{1, false}, {2, false}, {4, false}});
+    Alignment snp_read = ref_read;
+    snp_read.set_name("snp");
+    Edit* substitution = snp_read.mutable_path()->mutable_mapping(1)->mutable_edit(0);
+    substitution->set_sequence("G");
+    string bases = snp_read.sequence();
+    bases[8] = 'G';
+    snp_read.set_sequence(bases);
+
+    InMemorySiteReadSource source;
+    // Named so that the matrix's rows, ordered by name, are the reference read first.
+    ref_read.set_name("000000:ref");
+    snp_read.set_name("000001:snp");
+    source.add(ref_read);
+    source.add(snp_read);
+    QualAdjAlignmentScorer qual_scorer;
+    MatrixAlignmentScorer plain_scorer;
+    for (bool optimal_pairing : {false, true}) {
+        AlleleLikelihoodParams params;
+        params.optimal_pairing = optimal_pairing;
+        GraphAlignedAlleleLikelihoodCalculator calculator(site.graph, source, qual_scorer,
+                                                          plain_scorer, params);
+        AlleleReadLikelihoods matrix = calculator.compute(bounds_of(site.graph, site.snarl), walks,
+                                                          {}, 2, &sequences);
+        REQUIRE(matrix.num_reads() == 2);
+        // Each read fits its own allele best, which it would not if both alleles were spelled by
+        // their shared walk.
+        REQUIRE(matrix.rel(0, 0) == Approx(1.0));
+        REQUIRE(matrix.rel(0, 1) < 1.0);
+        REQUIRE(matrix.rel(1, 1) == Approx(1.0));
+        REQUIRE(matrix.rel(1, 0) < 1.0);
+        // The SNP costs each read one mismatch against the other allele, either way round.
+        REQUIRE(matrix.rel(0, 1) == Approx(matrix.rel(1, 0)));
+
+        // Without the step sequences the two alleles are one, and no read tells them apart.
+        AlleleReadLikelihoods walks_only = calculator.compute(bounds_of(site.graph, site.snarl),
+                                                              walks, {}, 2);
+        REQUIRE(walks_only.rel(1, 0) == Approx(walks_only.rel(1, 1)));
+    }
+}
+
 TEST_CASE("Every allele is scored over the same span of read bases",
           "[allele_likelihood][scoring]") {
     // The window invariant. A read placeable over more bases on one allele than

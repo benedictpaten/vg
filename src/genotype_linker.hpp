@@ -100,17 +100,21 @@ public:
     /// Returns whether the site was filed: only a read-likelihood call (`score` not null) of one or
     /// two alleles, none of them missing, is. If it was and `panel_out` is given, the site's panel
     /// alleles are moved to `panel_out`, so that the staged site can keep them rather than look
-    /// them up again.
+    /// them up again. `sequences` holds the step sequences of the alleles in `travs` that their
+    /// walks do not spell, or is null when there are none.
     bool add(const SiteBounds& site, const vector<Traversal>& travs,
              const vector<int>& trav_genotype, const SiteScore* score,
              int ref_trav_idx, const string& ref_path_name, int ref_offset, size_t record_key,
              const NestingPlacement& placement, bool no_reference = false,
-             int64_t position_from_parent = 0, vector<int>* panel_out = nullptr) const;
+             int64_t position_from_parent = 0, vector<int>* panel_out = nullptr,
+             const AlleleSequences* sequences = nullptr) const;
 
     /// The frequency exponent a site should decode with: `LinkageModel::Params::hp_prior` at a
-    /// run-length site, or -1 for the model's own. Reads the traversals' sequences only when
+    /// run-length site, or -1 for the model's own. Reads the alleles' sequences, from
+    /// `sequences` where an allele has step sequences, only when
     /// `hp_prior` is on.
-    double freq_prior(const vector<Traversal>& travs, int ref_trav_idx) const;
+    double freq_prior(const vector<Traversal>& travs, const AlleleSequences* sequences,
+                      int ref_trav_idx) const;
 
     /// The genotype the linkage model chose for a staged site, or the direct pass's genotype
     /// where the model chose none.

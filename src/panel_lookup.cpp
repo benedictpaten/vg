@@ -18,7 +18,8 @@ PanelLookup::PanelLookup(const HandleGraph* graph, const gbwt::GBWT* gbwt,
     }
 }
 
-vector<int> PanelLookup::alleles(const vector<Traversal>& travs) const {
+vector<int> PanelLookup::alleles(const vector<Traversal>& travs,
+                                 const AlleleSequences* sequences) const {
     vector<int> out;
     if (index == nullptr || haplotype_of_sequence == nullptr) {
         return out;
@@ -53,7 +54,7 @@ vector<int> PanelLookup::alleles(const vector<Traversal>& travs) const {
 
     for (size_t a = 0; a < travs.size(); ++a) {
         const Traversal& walk = travs[a];
-        if (walk.empty()) {
+        if (walk.empty() || own_sequences(sequences, a) != nullptr) {
             continue;
         }
         gbwt::SearchState state;

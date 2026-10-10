@@ -420,14 +420,19 @@ GraphAlignedAlleleLikelihoodCalculator::GraphAlignedAlleleLikelihoodCalculator(
 }
 
 vector<GraphAlignedAlleleLikelihoodCalculator::AlleleStep>
-GraphAlignedAlleleLikelihoodCalculator::get_allele_steps(const Traversal& walk) const {
+GraphAlignedAlleleLikelihoodCalculator::get_allele_steps(const Traversal& walk,
+                                                         const StepSequences* own) const {
     vector<AlleleStep> steps;
     steps.reserve(walk.size());
-    for (const handle_t& handle : walk) {
+    for (size_t i = 0; i < walk.size(); ++i) {
         AlleleStep step;
-        step.node_id = graph.get_id(handle);
-        step.backward = graph.get_is_reverse(handle);
-        step.sequence = graph.get_sequence(handle);
+        step.node_id = graph.get_id(walk[i]);
+        step.backward = graph.get_is_reverse(walk[i]);
+        step.sequence = graph.get_sequence(walk[i]);
+        if (own != nullptr && own->at(i) != step.sequence) {
+            step.sequence = own->at(i);
+            step.own_sequence = true;
+        }
         steps.push_back(std::move(step));
     }
     return steps;
@@ -604,12 +609,17 @@ bool GraphAlignedAlleleLikelihoodCalculator::read_is_reverse_of_alleles(
 
 int32_t GraphAlignedAlleleLikelihoodCalculator::score_shared_node(
     const Alignment& aln, const ReadStep& step, const EditAlignmentScorer& read_scorer,
-    double& nat_adjust) const {
+    double& nat_adjust, const AlleleStep* allele_step) const {
 
     int32_t score = 0;
     const string& seq = aln.sequence();
     const string& qual = aln.quality();
     size_t read_pos = step.read_offset;
+    // Where the allele spells the node with its own sequence, the aligned bases are compared
+    // with it, at the node offsets the alignment gives them.
+    const string* own = (allele_step != nullptr && allele_step->own_sequence)
+                            ? &allele_step->sequence : nullptr;
+    size_t node_pos = (size_t)step.mapping->position().offset();
 
     for (int64_t i = 0; i < step.mapping->edit_size(); ++i) {
         const Edit& edit = step.mapping->edit(i);
@@ -621,7 +631,9 @@ int32_t GraphAlignedAlleleLikelihoodCalculator::score_shared_node(
             break;
         }
 
-        if (from_len == to_len) {
+        if (from_len == to_len && own != nullptr) {
+            score += score_substitution(aln, read_pos, to_len, *own, node_pos, read_scorer);
+        } else if (from_len == to_len) {
             auto begin = seq.begin() + read_pos;
             auto end = begin + to_len;
             auto qual_begin = qual.empty() ? seq.begin() : qual.begin() + read_pos;
@@ -642,6 +654,7 @@ int32_t GraphAlignedAlleleLikelihoodCalculator::score_shared_node(
         }
 
         read_pos += to_len;
+        node_pos += from_len;
     }
 
     return score;
@@ -814,7 +827,8 @@ int32_t GraphAlignedAlleleLikelihoodCalculator::score_by_greedy_pairing(
                 }
             }
 
-            score += score_shared_node(aln, read_step, read_scorer, nat_adjust);
+            score += score_shared_node(aln, read_step, read_scorer, nat_adjust,
+                                       &allele_steps[found]);
             bases_accounted += read_step.read_length;
             have_anchor = true;
             in_insertion = false;
@@ -1046,7 +1060,11 @@ int32_t GraphAlignedAlleleLikelihoodCalculator::score_by_optimal_pairing(
 
             int32_t pair = NEG;
             double pair_nats = 0.0;
-            if (is_match) {
+            if (is_match && as.own_sequence) {
+                // Scored against the allele's own sequence, which the read's cached score of
+                // the node does not know.
+                pair = score_shared_node(aln, rs, read_scorer, pair_nats, &as);
+            } else if (is_match) {
                 pair = scratch.own[i - 1];
                 pair_nats = scratch.own_nats[i - 1];
             } else if (!holds(allele_keys, rkey) &&
@@ -1346,7 +1364,7 @@ GraphAlignedAlleleLikelihoodCalculator::id_window_read_stats(
 
 AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
     const SiteBounds& site, const vector<Traversal>& traversals,
-    const vector<SiteBounds>& enclosing, int region_ploidy) {
+    const vector<SiteBounds>& enclosing, int region_ploidy, const AlleleSequences* sequences) {
 
 
     AlleleReadLikelihoodsBuilder builder(traversals.size(), params.min_mismap_prob,
@@ -1379,8 +1397,8 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
     // not per (read, allele), so it stays off the hot path.
     vector<vector<AlleleStep>> allele_steps;
     allele_steps.reserve(traversals.size());
-    for (const Traversal& walk : traversals) {
-        allele_steps.push_back(get_allele_steps(walk));
+    for (size_t a = 0; a < traversals.size(); ++a) {
+        allele_steps.push_back(get_allele_steps(traversals[a], own_sequences(sequences, a)));
     }
     // Sorted once per allele, not once per (read, allele): the keys do not mention the read.
     vector<vector<int64_t>> allele_keys;

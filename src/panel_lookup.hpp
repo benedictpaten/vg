@@ -34,9 +34,12 @@ public:
     PanelLookup(const HandleGraph* graph, const gbwt::GBWT* gbwt,
                 const vector<size_t>* sequence_to_haplotype, size_t panel_size);
 
-    /// Which of the walks `travs` each panel haplotype follows, or -1 where it does not traverse
-    /// the site. Empty when there is no panel.
-    vector<int> alleles(const vector<Traversal>& travs) const;
+    /// Which of the alleles `travs` each panel haplotype carries, or -1 where it does not traverse
+    /// the site. A haplotype carries an allele whose walk it follows, unless the allele has step
+    /// sequences in `sequences`: no graph walk spells such an allele, so no haplotype carries it.
+    /// Empty when there is no panel.
+    vector<int> alleles(const vector<Traversal>& travs,
+                        const AlleleSequences* sequences = nullptr) const;
 
     /// The GBWT, or null when there is no panel.
     const gbwt::GBWT* gbwt() const { return index; }

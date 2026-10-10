@@ -399,17 +399,21 @@ bool VCFOutputCaller::emit_variant(const PathPositionHandleGraph& graph, SnarlCa
             return record_steps.phase(snarl, site_genotype, trav_to_allele, gt);
         };
     }
-    hooks.fill_info = [&](const vector<int>& site_trav, const vector<int>& site_genotype,
-                          vcflib::Variant& variant) {
-        // The "*" placeholder is an empty traversal.
-        vector<SnarlTraversal> site_traversals;
-        site_traversals.reserve(site_trav.size());
-        for (int trav : site_trav) {
-            site_traversals.push_back(trav >= 0 ? called_traversals[trav] : SnarlTraversal());
-        }
-        snarl_caller.update_vcf_info(snarl, site_traversals, site_genotype, call_info, sample_name,
-                                     variant);
-    };
+    if (record_steps.fill_info) {
+        hooks.fill_info = record_steps.fill_info;
+    } else {
+        hooks.fill_info = [&](const vector<int>& site_trav, const vector<int>& site_genotype,
+                              vcflib::Variant& variant) {
+            // The "*" placeholder is an empty traversal.
+            vector<SnarlTraversal> site_traversals;
+            site_traversals.reserve(site_trav.size());
+            for (int trav : site_trav) {
+                site_traversals.push_back(trav >= 0 ? called_traversals[trav] : SnarlTraversal());
+            }
+            snarl_caller.update_vcf_info(snarl, site_traversals, site_genotype, call_info,
+                                         sample_name, variant);
+        };
+    }
     hooks.gl_layout = record_steps.gl_layout ? record_steps.gl_layout(call_info.get())
                                              : GLLayout::IMajor;
 

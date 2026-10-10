@@ -78,7 +78,7 @@ bool GenotypeLinker::add(const SiteBounds& site, const vector<Traversal>& travs,
                          int ref_trav_idx, const string& ref_path_name, int ref_offset,
                          size_t record_key, const NestingPlacement& placement,
                          bool no_reference, int64_t position_from_parent,
-                         vector<int>* panel_out) const {
+                         vector<int>* panel_out, const AlleleSequences* sequences) const {
     if (model == nullptr) {
         return false;
     }
@@ -105,7 +105,7 @@ bool GenotypeLinker::add(const SiteBounds& site, const vector<Traversal>& travs,
     // No allele map yet: the written alleles are chosen when the record is built, and
     // `set_allele_map` supplies the map then.
     static const vector<int> no_allele_map;
-    vector<int> panel = lookup->alleles(travs);
+    vector<int> panel = lookup->alleles(travs, sequences);
     model->record(
         locus.contig, locus.position,
         rl_info->genotype_lls,
@@ -124,7 +124,7 @@ bool GenotypeLinker::add(const SiteBounds& site, const vector<Traversal>& travs,
             .emitted = false,
             .unpositioned = no_reference,
             .chain_key = placement.chain_key,
-            .freq_prior = freq_prior(travs, ref_trav_idx),
+            .freq_prior = freq_prior(travs, sequences, ref_trav_idx),
         });
     if (panel_out != nullptr) {
         *panel_out = std::move(panel);
@@ -132,15 +132,16 @@ bool GenotypeLinker::add(const SiteBounds& site, const vector<Traversal>& travs,
     return true;
 }
 
-double GenotypeLinker::freq_prior(const vector<Traversal>& travs, int ref_trav_idx) const {
+double GenotypeLinker::freq_prior(const vector<Traversal>& travs,
+                                  const AlleleSequences* sequences, int ref_trav_idx) const {
     const LinkageModel::Params& params = model->model_params();
     if (params.hp_prior <= 0.0) {
         return -1.0;
     }
     vector<string> alleles;
     alleles.reserve(travs.size());
-    for (const Traversal& walk : travs) {
-        alleles.push_back(reader.spell(walk));
+    for (size_t a = 0; a < travs.size(); ++a) {
+        alleles.push_back(reader.spell(travs[a], own_sequences(sequences, a)));
     }
     const size_t ref = ref_trav_idx >= 0 ? (size_t)ref_trav_idx : (size_t)-1;
     return LinkageModel::run_length_site(alleles, params.hp_prior_run, ref) ? params.hp_prior : -1.0;
@@ -461,7 +462,7 @@ GenotypeLinker::PassCounts GenotypeLinker::link(StagedSiteTable& sites, PhaseTab
                         .emitted = false,
                         .unpositioned = pr.no_reference,
                         .chain_key = pr.chain_key,
-                        .freq_prior = freq_prior(pr.travs, pr.ref_trav_idx),
+                        .freq_prior = freq_prior(pr.travs, &pr.sequences, pr.ref_trav_idx),
                     });
                 if (!model->has_entry(pr.record_key)) {
                     // `record` adds nothing for a site whose compact space it cannot describe: no called

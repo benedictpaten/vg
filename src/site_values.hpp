@@ -50,6 +50,24 @@ vector<SnarlTraversal> snarl_traversals_of(const HandleGraph& graph,
 /// orientations.
 bool same_walk(const HandleGraph& graph, const SnarlTraversal& trav, const Traversal& walk);
 
+/// The sequence of each step of an allele's walk, each read the way the walk reads its node, for
+/// an allele that its walk does not spell: one that no graph walk spells, such as a walk with a
+/// base changed inside one of its nodes. Empty for an allele that its walk spells.
+using StepSequences = vector<string>;
+
+/// The `StepSequences` of each of a site's alleles, by allele. Empty when every allele is spelled
+/// by its walk, as every allele of a site the decomposition holds is. An allele with step
+/// sequences is spelled, scored and written as them, and no panel haplotype carries it, whichever
+/// walk it takes.
+using AlleleSequences = vector<StepSequences>;
+
+/// The step sequences of allele `allele` in `sequences`, or null when its walk spells it or
+/// `sequences` is null.
+const StepSequences* own_sequences(const AlleleSequences* sequences, size_t allele);
+
+/// The sequence an allele spells: its step sequences `own` when not null, or else its walk's.
+string allele_sequence(const HandleGraph& graph, const Traversal& walk, const StepSequences* own);
+
 namespace multipass {
 
 
