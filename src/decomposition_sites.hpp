@@ -26,13 +26,22 @@ using handlegraph::SnarlDecomposition;
  * The two bounds of a site or chain, oriented as a Snarl's start and end
  * Visits are: the start handle reads into it, and the end handle reads out
  * of it.
+ *
+ * A site lies between two boundary sides. Usually these are the sides of
+ * `start` and `end` that face into the site, so the site lies between two
+ * nodes, which may be one node, as in a cyclic chain. A site can instead lie
+ * inside one node (`inside_node`). `start` and `end` are then that node,
+ * read the same way, and the boundary sides are the node's own two sides.
+ * The decomposition never gives bounds inside a node.
  */
 struct SiteBounds {
     handle_t start;
     handle_t end;
+    /// Whether the site lies inside the node `start` and `end` both read.
+    bool inside_node = false;
 
     inline bool operator==(const SiteBounds& other) const {
-        return start == other.start && end == other.end;
+        return start == other.start && end == other.end && inside_node == other.inside_node;
     }
 
     inline bool operator!=(const SiteBounds& other) const {

@@ -166,6 +166,63 @@ TEST_CASE("ChildOffsets gives base_offset_of_child's answer by lookup", "[graph_
 }
 
 
+TEST_CASE("A site inside a node is crossed by each visit to it, and a cyclic site by a second visit",
+          "[graph_caller]") {
+    bdsg::HashGraph graph;
+    add_numbered_nodes(graph);
+    // Both are bounded by node 2 read forward at each end. The cyclic site lies between the
+    // node's sides, outside it; the other lies inside it, between the sides of its bases.
+    const SiteBounds inside{graph.get_handle(2), graph.get_handle(2), true};
+    const SiteBounds cyclic = make_child(graph, 2, 2);
+    REQUIRE(inside != cyclic);
+    auto crossings = [&](const Traversal& walk, const SiteBounds& child) {
+        return ChildPlacer::crossings_of_child(graph, ChildPlacer::index_traversal_nodes(graph, walk),
+                                               child);
+    };
+
+    SECTION("one visit crosses the site inside the node, and not the cyclic site") {
+        const Traversal once = make_walk(graph, {1, 2, 3});
+        REQUIRE(crossings(once, inside) == 1);
+        REQUIRE(crossings(once, cyclic) == 0);
+        REQUIRE(ChildPlacer::offset_of_child(graph, once, inside) == 1);
+        REQUIRE(ChildPlacer::offset_of_child(graph, once, cyclic) == -1);
+        const ChildPlacer::ChildOffsets offsets(graph, once);
+        REQUIRE(offsets.base_offset(graph, inside) == 1);
+        REQUIRE(offsets.base_offset(graph, cyclic) == -1);
+    }
+    SECTION("two visits cross the site inside the node twice, and the cyclic site once") {
+        const Traversal twice = make_walk(graph, {1, 2, 3, 2, 5});
+        REQUIRE(crossings(twice, inside) == 2);
+        REQUIRE(crossings(twice, cyclic) == 1);
+        // Both are entered at the first visit.
+        REQUIRE(ChildPlacer::offset_of_child(graph, twice, inside) == 1);
+        REQUIRE(ChildPlacer::offset_of_child(graph, twice, cyclic) == 1);
+    }
+    SECTION("a visit read backward crosses the site inside the node too") {
+        Traversal backward = make_walk(graph, {1, 3});
+        backward.insert(backward.begin() + 1, graph.get_handle(2, true));
+        REQUIRE(crossings(backward, inside) == 1);
+        REQUIRE(ChildPlacer::offset_of_child(graph, backward, inside) == 1);
+    }
+    SECTION("a walk that misses the node does not cross it") {
+        const Traversal missing = make_walk(graph, {1, 3, 4});
+        REQUIRE(crossings(missing, inside) == 0);
+        REQUIRE(ChildPlacer::offset_of_child(graph, missing, inside) == -1);
+        REQUIRE(ChildPlacer::ChildOffsets(graph, missing).base_offset(graph, inside) == -1);
+    }
+    SECTION("the crossing mask sets the bit of each walk that visits the node") {
+        const vector<ChildPlacer::TraversalNodeIndex> visits{
+            ChildPlacer::index_traversal_nodes(graph, make_walk(graph, {1, 2, 3})),
+            ChildPlacer::index_traversal_nodes(graph, make_walk(graph, {1, 3})),
+            ChildPlacer::index_traversal_nodes(graph, make_walk(graph, {1, 2, 3, 2, 5}))};
+        bool known = false;
+        REQUIRE(ChildPlacer::child_crossing_mask(graph, visits, inside, &known) == 0b101);
+        REQUIRE(known);
+        REQUIRE(ChildPlacer::child_crossing_mask(graph, visits, cyclic, &known) == 0b100);
+    }
+}
+
+
 /// Sets the tables the anchor path's strand lookup reads.
 class StrandLookup : public ReadStrandTable {
 public:

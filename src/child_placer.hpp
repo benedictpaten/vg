@@ -113,9 +113,15 @@ struct NestingPlacement {
  * children from the snarl decomposition.
  *
  * Its static members say how a parent's candidate walks cross its child sites: which walks cross
- * a child, and how far along a walk the child starts. A walk crosses a child when it visits one of
- * the child's boundary nodes and then the other, so a walk that touches both boundaries on
- * unrelated excursions does not count.
+ * a child, and how far along a walk the child starts. A walk crosses a child each time it passes
+ * one of the child's boundary sides (see `SiteBounds`) and later the other:
+ * - For a child between two nodes, a visit to a bounding node passes the side of it that faces
+ *   the child, whichever way the node is read. So the walk crosses the child when it visits one
+ *   boundary node and then the other, and a walk that touches one boundary twice, or touches both
+ *   on unrelated excursions, does not count. A child whose two bounds are one node, as in a
+ *   cyclic chain, is crossed only by a second visit to that node.
+ * - For a child inside one node, a visit to the node passes both of its sides, so every visit
+ *   crosses the child once.
  */
 class ChildPlacer {
 public:

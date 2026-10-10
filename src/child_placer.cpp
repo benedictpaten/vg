@@ -22,6 +22,11 @@ int ChildPlacer::crossings_of_child(const HandleGraph& graph, const TraversalNod
                                    const SiteBounds& child) {
     const nid_t start = graph.get_id(child.start);
     const nid_t end = graph.get_id(child.end);
+    if (child.inside_node) {
+        // Each visit passes both of the node's sides.
+        auto found = visits.find(start);
+        return found == visits.end() ? 0 : (int)found->second.size();
+    }
     // Count crossings: an entry at one boundary followed by the other. Order matters: testing for
     // the two boundaries separately would count a walk that touches both on unrelated excursions,
     // as find_child_traversal_set does. Only visits to the two boundary nodes can change the
@@ -58,6 +63,15 @@ int ChildPlacer::offset_of_child(const HandleGraph& graph, const Traversal& walk
                                  const SiteBounds& child) {
     const nid_t start = graph.get_id(child.start);
     const nid_t end = graph.get_id(child.end);
+    if (child.inside_node) {
+        // One visit is a whole crossing.
+        for (int i = 0; i < (int)walk.size(); ++i) {
+            if (graph.get_id(walk[i]) == start) {
+                return i;
+            }
+        }
+        return -1;
+    }
     nid_t open = 0;
     int entry = -1;
     for (int i = 0; i < (int)walk.size(); ++i) {
@@ -88,6 +102,10 @@ int64_t ChildPlacer::ChildOffsets::base_offset(const HandleGraph& graph,
     const nid_t end = graph.get_id(child.end);
     auto start_visits = visits_of.find(start);
     auto end_visits = visits_of.find(end);
+    if (child.inside_node) {
+        // The first visit is a whole crossing.
+        return start_visits == visits_of.end() ? -1 : bases_before[start_visits->second.front()];
+    }
     const int none = numeric_limits<int>::max();
     const int first_start = start_visits == visits_of.end() ? none : start_visits->second.front();
     const int first_end = end_visits == visits_of.end() ? none : end_visits->second.front();
