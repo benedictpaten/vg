@@ -5,6 +5,8 @@
 #include <tuple>
 #include <unordered_set>
 
+#include <omp.h>
+
 #include "utility.hpp"
 
 namespace vg {
@@ -246,6 +248,21 @@ vector<EditCandidate> count_snv_edits(
     }
     std::sort(kept.begin(), kept.end());
     return kept;
+}
+
+void EditOutcomes::add(EditOutcome&& outcome) {
+    by_thread.at(omp_get_thread_num()).push_back(std::move(outcome));
+}
+
+vector<EditOutcome> EditOutcomes::sorted() const {
+    vector<EditOutcome> all;
+    for (const auto& list : by_thread) {
+        all.insert(all.end(), list.begin(), list.end());
+    }
+    std::sort(all.begin(), all.end(), [](const EditOutcome& a, const EditOutcome& b) {
+        return tie(a.node, a.offset, a.alt) < tie(b.node, b.offset, b.alt);
+    });
+    return all;
 }
 
 void for_each_candidate_on(const vector<EditCandidate>& sorted, const vector<nid_t>& nodes,

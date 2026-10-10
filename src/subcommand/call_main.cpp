@@ -198,6 +198,8 @@ void help_call(char** argv) {
          << "                            mismatches recurring in the reads (experimental)" << endl
          << "      --off-panel-dump FILE write each off-panel candidate, with its read counts" << endl
          << "                            and what became of it, to FILE as TSV" << endl
+         << "      --off-panel-bar K,F,G call a candidate with >= K ALT fragments, an ALT" << endl
+         << "                            fraction >= F, and GQ >= G [5,0.25,0]" << endl
          << "  read-based phasing (reliable heterozygous sites are joined into a phase" << endl
          << "  chain by the reads they share; other sites are phased from the chain):" << endl
          << "      --read-phasing        phase heterozygous sites with the reads that span" << endl
@@ -471,6 +473,7 @@ int main_call(int argc, char** argv) {
     // Off-panel detection, and where to write its candidates.
     bool off_panel = false;
     string off_panel_dump;
+    EditCallBar off_panel_bar;
     ReadPhasingParams read_phasing_params;
     // The preset is applied after all options are parsed. The *_explicit flags record which of its
     // settings were given explicitly, and those keep their given values.
@@ -554,6 +557,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_LINKAGE_MUTATION = 1113;
     constexpr int OPT_OFF_PANEL = 1114;
     constexpr int OPT_OFF_PANEL_DUMP = 1115;
+    constexpr int OPT_OFF_PANEL_BAR = 1116;
     constexpr int OPT_DEPTH_TERM = 1025;
     constexpr int OPT_DEPTH_COUNT_RAW = 1026;
     constexpr int OPT_DEPTH_QUALITY = 1027;
@@ -712,6 +716,7 @@ int main_call(int argc, char** argv) {
         }},
         {"off-panel", {  // need --off-panel
             {"off-panel-dump", required_argument, 0, OPT_OFF_PANEL_DUMP},
+            {"off-panel-bar", required_argument, 0, OPT_OFF_PANEL_BAR},
         }},
         {"anchors", {  // need --anchors-out
             {"no-off-ref-nesting", no_argument, 0, OPT_NO_OFF_REF_NESTING},
@@ -1076,6 +1081,16 @@ int main_call(int argc, char** argv) {
         case OPT_OFF_PANEL_DUMP:
             off_panel_dump = optarg;
             break;
+        case OPT_OFF_PANEL_BAR: {
+            vector<string> parts = split_delims(optarg, ",");
+            if (parts.size() != 3) {
+                logger.error() << "--off-panel-bar takes K,F,G" << endl;
+            }
+            off_panel_bar.min_alt_fragments = parse<size_t>(parts[0]);
+            off_panel_bar.min_fraction = parse<double>(parts[1]);
+            off_panel_bar.min_gq = parse<double>(parts[2]);
+            break;
+        }
         case OPT_GAP_EXTEND:
             gap_extend_explicit = true;
             gap_extend = parse<int>(optarg);
@@ -2821,7 +2836,7 @@ int main_call(int argc, char** argv) {
             if (off_panel) {
                 // The reads are counted as they are fetched, from the first site on.
                 read_source->count_edits(graph, EditCountParams());
-                multipass_caller->set_off_panel(read_source.get(), off_panel_dump);
+                multipass_caller->set_off_panel(read_source.get(), off_panel_dump, off_panel_bar);
             }
             multipass_caller->set_regenotype(regenotype, regenotype_params, regenotype_passes,
                                              regenotype_ledger);

@@ -204,6 +204,9 @@ public:
     /// The chain `site` is in.
     ChildChain chain_of(const net_handle_t& site) const;
 
+    /// Where node `id` lies in the decomposition (see `placement_of_node`).
+    NodePlacement placement_of(nid_t id) const;
+
     /// `child`, a site `parent` holds, as a site to visit.
     static SiteView view_of(const SiteView& parent, const ChildSite& child);
 

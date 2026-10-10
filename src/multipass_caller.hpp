@@ -167,9 +167,10 @@ public:
     /// Turn on off-panel detection: `reads` counts each read's substitutions as it fetches them
     /// (see `SiteReadSource::count_edits`). With a `dump` path, every candidate is written there
     /// at the end.
-    void set_off_panel(const SiteReadSource* reads, const string& dump) {
+    void set_off_panel(const SiteReadSource* reads, const string& dump, const EditCallBar& bar) {
         edit_source = reads;
         edit_dump = dump;
+        edit_bar = bar;
     }
 
     /// Where and how to write the mosaic. A path turns phasing on.
@@ -224,6 +225,11 @@ private:
     /// Off-panel detection's read source, or null when it is off, and where to write its dump.
     const SiteReadSource* edit_source = nullptr;
     string edit_dump;
+    EditCallBar edit_bar;
+    /// What became of each candidate the call bar admitted, for the dump.
+    unique_ptr<EditOutcomes> edit_outcomes;
+    /// The nodes of the reference paths, sorted, for the top-level edit sites.
+    vector<nid_t> reference_nodes() const;
     /// Write every off-panel candidate to `edit_dump`, if it is set.
     void write_edit_dump() const;
     /// Where a node's base lies on the reference: the contig and the 1-based position of the base

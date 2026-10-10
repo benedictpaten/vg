@@ -259,6 +259,10 @@ ChildChain ChildPlacer::chain_of(const net_handle_t& site) const {
     return chain_of_site(*decomposition, *graph, site);
 }
 
+NodePlacement ChildPlacer::placement_of(nid_t id) const {
+    return placement_of_node(*decomposition, *graph, id);
+}
+
 void ChildPlacer::place(const SiteView& site, const Nested& nested, size_t site_key,
                         const vector<Traversal>& travs,
                         const vector<int>& genotype, int ref_trav_idx, int ploidy,

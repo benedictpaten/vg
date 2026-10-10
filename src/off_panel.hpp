@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <ostream>
+#include <string>
 #include <vector>
 
 #include <vg/vg.pb.h>
@@ -59,6 +60,48 @@ struct EditCandidate {
         if (offset != other.offset) return offset < other.offset;
         return alt < other.alt;
     }
+};
+
+/// The call bar: which candidates become edit sites, and which of those are staged once
+/// genotyped. Applied after the floors of `EditCountParams`.
+struct EditCallBar {
+    /// The fewest fragments carrying the ALT.
+    size_t min_alt_fragments = 5;
+    /// The smallest ALT fraction.
+    double min_fraction = 0.25;
+    /// The lowest GQ at which a site called with the ALT is staged.
+    double min_gq = 0.0;
+
+    bool admits(const EditCandidate& candidate) const {
+        return candidate.alt_fragments >= min_alt_fragments
+               && candidate.fraction() >= min_fraction;
+    }
+};
+
+/// What became of one candidate that passed the call bar: where it was placed, and its direct-pass
+/// call.
+struct EditOutcome {
+    nid_t node = 0;
+    uint32_t offset = 0;
+    char alt = 'N';
+    /// "top" or "nested" where the site was genotyped, or why it was not.
+    string placed;
+    string site;
+    vector<int> genotype;
+    double gq = 0.0;
+    /// Whether it was staged, to be phased and written like any other site.
+    bool staged = false;
+};
+
+/// The outcomes, filed from the threads that genotyped them without a lock.
+class EditOutcomes {
+public:
+    explicit EditOutcomes(size_t threads) : by_thread(threads) {}
+    void add(EditOutcome&& outcome);
+    /// Every outcome, by node, offset and ALT.
+    vector<EditOutcome> sorted() const;
+private:
+    vector<vector<EditOutcome>> by_thread;
 };
 
 /// Count the substitutions that the reads `for_each_read` visits make on the nodes `owns`

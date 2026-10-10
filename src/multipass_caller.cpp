@@ -46,6 +46,10 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
                            const function<void()>& after_direct_pass) {
     // Sized here rather than inside the parallel region that writes it.
     staged_sites.start(max((size_t)get_thread_count(), (size_t)omp_get_max_threads()));
+    if (edit_source != nullptr) {
+        edit_outcomes.reset(
+            new EditOutcomes(max((size_t)get_thread_count(), (size_t)omp_get_max_threads())));
+    }
     // Configured here, once call_main has set nested calling and off-reference descent.
     tree_genotyper.configure(
         TreeGenotyper::Parts{
@@ -62,17 +66,24 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
             .site_id = [this](const SiteBounds& site) {
                 return output.print_snarl(&graph, site.start, site.end);
             },
+            .edit_source = edit_source,
+            .edit_outcomes = edit_outcomes.get(),
         },
         TreeGenotyper::Options{
             .nested_calling = nested_calling,
             .off_reference = off_reference_nesting,
             .top_down = top_down,
             .star_allele = star_allele,
+            .edit_bar = edit_bar,
         });
 
     // The direct pass.
     walker.walk(recurse_type, snarl_batch_window, show_progress,
                 [&](const SiteView& site) { return tree_genotyper.genotype(site); });
+    if (edit_source != nullptr) {
+        // The edit sites no site holds, now that every window the sites fetched has been counted.
+        tree_genotyper.genotype_top_level_edits(reference_nodes());
+    }
     if (show_progress) {
         report_descent_instrumentation();
     }
@@ -119,6 +130,21 @@ pair<string, int64_t> MultiPassCaller::reference_position(nid_t node, uint32_t o
     return found;
 }
 
+vector<nid_t> MultiPassCaller::reference_nodes() const {
+    vector<nid_t> nodes;
+    for (const string& name : ref_path_set) {
+        if (!graph.has_path(name)) {
+            continue;
+        }
+        graph.for_each_step_in_path(graph.get_path_handle(name), [&](const step_handle_t& step) {
+            nodes.push_back(graph.get_id(graph.get_handle_of_step(step)));
+        });
+    }
+    std::sort(nodes.begin(), nodes.end());
+    nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+    return nodes;
+}
+
 void MultiPassCaller::write_edit_dump() const {
     if (edit_source == nullptr || edit_dump.empty()) {
         return;
@@ -129,7 +155,10 @@ void MultiPassCaller::write_edit_dump() const {
         return;
     }
     out << "#contig\tpos\tnode\toffset\tref\talt\talt_frags\tref_frags\tother_frags"
-           "\tdiscordant_frags\taf\tmean_alt_mapq\n";
+           "\tdiscordant_frags\taf\tmean_alt_mapq\tplaced\tsite\tgt\tgq\tstaged\n";
+    const vector<EditOutcome> outcomes =
+        edit_outcomes != nullptr ? edit_outcomes->sorted() : vector<EditOutcome>();
+    auto outcome = outcomes.begin();
     for (const EditCandidate& c : edit_source->counted_edit_candidates()) {
         const pair<string, int64_t> at = reference_position(c.node, c.offset);
         out << (at.first.empty() ? "." : at.first) << "\t";
@@ -140,8 +169,27 @@ void MultiPassCaller::write_edit_dump() const {
         }
         out << "\t" << c.node << "\t" << c.offset << "\t" << c.ref << "\t" << c.alt << "\t"
             << c.alt_fragments << "\t" << c.ref_fragments << "\t" << c.other_fragments << "\t"
-            << c.discordant_fragments << "\t" << c.fraction() << "\t" << c.mean_alt_mapq
-            << "\n";
+            << c.discordant_fragments << "\t" << c.fraction() << "\t" << c.mean_alt_mapq;
+        // The candidate's outcome, if the call bar admitted it.
+        while (outcome != outcomes.end()
+               && tie(outcome->node, outcome->offset, outcome->alt) < tie(c.node, c.offset, c.alt)) {
+            ++outcome;
+        }
+        if (outcome != outcomes.end() && outcome->node == c.node && outcome->offset == c.offset
+            && outcome->alt == c.alt) {
+            out << "\t" << outcome->placed << "\t" << (outcome->site.empty() ? "." : outcome->site)
+                << "\t";
+            for (size_t i = 0; i < outcome->genotype.size(); ++i) {
+                out << (i ? "/" : "") << outcome->genotype[i];
+            }
+            if (outcome->genotype.empty()) {
+                out << ".";
+            }
+            out << "\t" << outcome->gq << "\t" << (outcome->staged ? 1 : 0);
+        } else {
+            out << "\t" << (edit_bar.admits(c) ? "unplaced" : "below_bar") << "\t.\t.\t.\t0";
+        }
+        out << "\n";
     }
 }
 

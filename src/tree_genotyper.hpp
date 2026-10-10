@@ -13,6 +13,8 @@
 #include "candidate_finder.hpp"
 #include "child_placer.hpp"
 #include "genotype_linker.hpp"
+#include "off_panel.hpp"
+#include "site_read_source.hpp"
 #include "ploidy_regions.hpp"
 #include "site_genotyper.hpp"
 #include "staged_site.hpp"
@@ -48,6 +50,10 @@ public:
         const map<string, int>* ref_ploidies = nullptr;
         /// The ID of the site with bounds `site`, as its records name it (see `StagedSite::id`).
         function<string(const SiteBounds& site)> site_id;
+        /// Off-panel detection's candidates, or null when it is off.
+        const SiteReadSource* edit_source = nullptr;
+        /// What became of each candidate the call bar admits. Set when `edit_source` is.
+        EditOutcomes* edit_outcomes = nullptr;
     };
 
     /// Which sites below a top-level site are genotyped.
@@ -63,6 +69,8 @@ public:
         /// With `top_down`, a parent allele that skips a child gives it a star allele rather than
         /// a missing one.
         bool star_allele = false;
+        /// Which off-panel candidates become edit sites, and which edit sites are staged.
+        EditCallBar edit_bar;
     };
 
     void configure(const Parts& parts, const Options& options);
@@ -72,7 +80,36 @@ public:
     /// top-level sites instead.
     bool genotype(const SiteView& site);
 
+    /// Genotype and stage, as top-level sites, the edit sites of the off-panel candidates on the
+    /// nodes `nodes` (sorted, without duplicates) that no site holds. An edit site a site holds is
+    /// one of that site's children, genotyped and staged in its descent. Runs on several threads.
+    void genotype_top_level_edits(const vector<nid_t>& nodes);
+
 private:
+    /// An off-panel candidate's edit site, as a child of the site holding it.
+    struct HeldEdit {
+        ChildSite child;
+        EditSite site;
+        EditCandidate candidate;
+    };
+
+    /// The candidates the call bar admits, one per base: the ALT the most fragments carry.
+    vector<EditCandidate> admitted(vector<EditCandidate> candidates) const;
+
+    /// The edit sites that the site `view`, genotyped as `bounds` with candidate walks `walks`,
+    /// holds itself rather than through a child site, each read as the walks read its node,
+    /// the reference walk `ref_trav_idx` first.
+    vector<HeldEdit> edits_held_by(const SiteView& view, const SiteBounds& bounds,
+                                   const vector<Traversal>& walks, int ref_trav_idx) const;
+
+    /// Genotype one edit site and stage it if it is called with its ALT: as a top-level site
+    /// where `top_level`, and otherwise as a child placed at `placement` under a site on the
+    /// reference path `parent_ref_path_name` over `parent_ref_interval`, at `ploidy_override`.
+    void genotype_edit_site(const HeldEdit& edit, const vector<SiteBounds>& enclosing,
+                            const string& parent_ref_path_name,
+                            pair<size_t, size_t> parent_ref_interval, int ploidy_override,
+                            const NestingPlacement& placement, bool top_level);
+
     /// Genotype and stage one site, then the sites below it.
     /// @param parent_ref_path_name Reference path from parent (for off-reference snarls)
     /// @param parent_ref_interval Reference interval from parent
