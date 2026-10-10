@@ -604,6 +604,7 @@ bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int stran
         Traversal walk;
         StepSequences steps;
         bool inside_node;
+        size_t key;
     };
     vector<Replacement> replacements;
     for (const StagedSite* child : kids->second) {
@@ -626,6 +627,7 @@ bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int stran
         }
         Replacement rep;
         rep.inside_node = child->bounds.inside_node;
+        rep.key = child->record_key;
         if (!spliced_allele(*child, child_trav, strand, phase->ploidy == 1, rep.walk, rep.steps)) {
             rep.walk = child->travs[child_trav];
             if (const StepSequences* own = own_sequences(&child->sequences, child_trav)) {
@@ -680,8 +682,18 @@ bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int stran
     if (replacements.empty()) {
         return false;
     }
-    std::stable_sort(replacements.begin(), replacements.end(),
-                     [](const Replacement& a, const Replacement& b) { return a.begin < b.begin; });
+    // Routes first, in walk order, then the children inside a node on the spliced walk, so that
+    // the result does not depend on the order the children were staged in.
+    vector<Replacement> routes;
+    vector<Replacement> edits;
+    for (Replacement& rep : replacements) {
+        (rep.inside_node ? edits : routes).push_back(std::move(rep));
+    }
+    std::sort(routes.begin(), routes.end(), [](const Replacement& a, const Replacement& b) {
+        return std::tie(a.begin, a.end, a.key) < std::tie(b.begin, b.end, b.key);
+    });
+    std::sort(edits.begin(), edits.end(),
+              [](const Replacement& a, const Replacement& b) { return a.key < b.key; });
 
     const StepSequences* own = own_sequences(&site.sequences, trav);
     walk.clear();
@@ -689,34 +701,12 @@ bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int stran
     bool changed = false;
     size_t r = 0;
     for (int i = 0; i < (int)parent_walk.size();) {
-        if (r < replacements.size() && replacements[r].begin < i) {
+        if (r < routes.size() && routes[r].begin < i) {
             ++r;   // overlaps one already spliced
             continue;
         }
-        if (r < replacements.size() && replacements[r].begin == i) {
-            if (replacements[r].inside_node) {
-                // Every child inside this node changes the bases it differs from the node in.
-                string spelled = own != nullptr ? own->at(i) : graph.get_sequence(parent_walk[i]);
-                const string node_seq = graph.get_sequence(parent_walk[i]);
-                for (; r < replacements.size() && replacements[r].begin == i
-                       && replacements[r].inside_node;
-                     ++r) {
-                    const string& child_seq = replacements[r].steps.front();
-                    for (size_t b = 0; b < child_seq.size() && b < spelled.size()
-                                       && child_seq.size() == node_seq.size();
-                         ++b) {
-                        if (child_seq[b] != node_seq[b] && spelled[b] != child_seq[b]) {
-                            spelled[b] = child_seq[b];
-                            changed = true;
-                        }
-                    }
-                }
-                walk.push_back(parent_walk[i]);
-                steps.push_back(std::move(spelled));
-                ++i;
-                continue;
-            }
-            const Replacement& rep = replacements[r];
+        if (r < routes.size() && routes[r].begin == i) {
+            const Replacement& rep = routes[r];
             // The child's allele replaces the parent's route through it.
             bool same = rep.end - rep.begin == (int)rep.walk.size();
             for (int k = 0; same && k < (int)rep.walk.size(); ++k) {
@@ -734,6 +724,29 @@ bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int stran
         walk.push_back(parent_walk[i]);
         steps.push_back(own != nullptr ? own->at(i) : graph.get_sequence(parent_walk[i]));
         ++i;
+    }
+    for (const Replacement& edit : edits) {
+        // A child inside a node changes the bases its allele differs from the node in, at the
+        // node's first visit, read the way that visit reads it.
+        const handle_t node = edit.walk.front();
+        for (size_t i = 0; i < walk.size(); ++i) {
+            if (graph.get_id(walk[i]) != graph.get_id(node)) {
+                continue;
+            }
+            const string child_seq = walk[i] == node ? edit.steps.front()
+                                                     : reverse_complement(edit.steps.front());
+            const string node_seq = graph.get_sequence(walk[i]);
+            string& spelled = steps[i];
+            if (child_seq.size() == node_seq.size() && spelled.size() == node_seq.size()) {
+                for (size_t b = 0; b < child_seq.size(); ++b) {
+                    if (child_seq[b] != node_seq[b] && spelled[b] != child_seq[b]) {
+                        spelled[b] = child_seq[b];
+                        changed = true;
+                    }
+                }
+            }
+            break;
+        }
     }
     if (!changed) {
         walk.clear();
