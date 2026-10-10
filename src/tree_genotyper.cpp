@@ -22,12 +22,24 @@ bool TreeGenotyper::genotype(const SiteView& site) {
     if (parts.edit_source != nullptr && site.enclosing.empty()) {
         // The edit sites on the chain nodes this site lies between, which no site holds, while
         // their reads are in memory. A node between two sites is taken by the first to reach it.
-        for (const handle_t& bound : {site.bounds.start, site.bounds.end}) {
-            vector<EditCandidate> on_bound;
-            parts.edit_source->for_each_edit_candidate(
-                {parts.graph->get_id(bound)},
-                [&](const EditCandidate& c) { on_bound.push_back(c); });
-            genotype_free_edits(std::move(on_bound));
+        // A site too wide for the read cache takes none, since fetching its far bound's window
+        // now, out of the walk's order, would fetch it again when the walk gets there.
+        vector<nid_t> bounds{parts.graph->get_id(site.bounds.start),
+                             parts.graph->get_id(site.bounds.end)};
+        std::sort(bounds.begin(), bounds.end());
+        bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+        vector<EditCandidate> on_bounds;
+        if (parts.edit_source->for_each_edit_candidate(
+                bounds, [&](const EditCandidate& c) { on_bounds.push_back(c); }, false)) {
+            for (nid_t node : bounds) {
+                vector<EditCandidate> on_node;
+                for (const EditCandidate& c : on_bounds) {
+                    if (c.node == node) {
+                        on_node.push_back(c);
+                    }
+                }
+                genotype_free_edits(std::move(on_node));
+            }
         }
     }
     return genotyped;
