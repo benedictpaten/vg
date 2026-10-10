@@ -63,10 +63,13 @@ struct EditCandidate {
 };
 
 /// The call bar: which candidates become edit sites, and which of those are staged once
-/// genotyped. Applied after the floors of `EditCountParams`.
+/// genotyped. Applied after the floors of `EditCountParams`. Fitted on chr20 at about 30x, short
+/// reads and ONT alike, from a dump taken with the floors as the bar: the F1 surface is flat in
+/// the fraction and the GQ, which the linkage model's own filtering makes redundant, and peaks at
+/// 7 fragments on both read types.
 struct EditCallBar {
     /// The fewest fragments carrying the ALT.
-    size_t min_alt_fragments = 5;
+    size_t min_alt_fragments = 7;
     /// The smallest ALT fraction.
     double min_fraction = 0.25;
     /// The lowest GQ at which a site called with the ALT is staged.

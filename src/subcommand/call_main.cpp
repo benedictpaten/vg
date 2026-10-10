@@ -196,10 +196,11 @@ void help_call(char** argv) {
          << "  off-panel variants:" << endl
          << "      --off-panel           also call SNVs that no graph walk spells, found as" << endl
          << "                            mismatches recurring in the reads (experimental)" << endl
-         << "      --off-panel-dump FILE write each off-panel candidate, with its read counts" << endl
-         << "                            and what became of it, to FILE as TSV" << endl
-         << "      --off-panel-bar K,F,G call a candidate with >= K ALT fragments, an ALT" << endl
-         << "                            fraction >= F, and GQ >= G [5,0.25,0]" << endl
+         << "      --off-panel-dump F    write each off-panel candidate, with its read" << endl
+         << "                            counts and what became of it, to F as TSV" << endl
+         << "      --off-panel-bar B     call a candidate whose ALT is on >= K fragments" << endl
+         << "                            and a fraction >= F of them, at GQ >= G, with B" << endl
+         << "                            given as K,F,G [7,0.25,0]" << endl
          << "  read-based phasing (reliable heterozygous sites are joined into a phase" << endl
          << "  chain by the reads they share; other sites are phased from the chain):" << endl
          << "      --read-phasing        phase heterozygous sites with the reads that span" << endl

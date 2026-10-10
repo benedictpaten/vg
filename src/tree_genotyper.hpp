@@ -80,10 +80,10 @@ public:
     /// top-level sites instead.
     bool genotype(const SiteView& site);
 
-    /// Genotype and stage, as top-level sites, the edit sites of the off-panel candidates on the
-    /// nodes `nodes` (sorted, without duplicates) that no site holds. An edit site a site holds is
-    /// one of that site's children, genotyped and staged in its descent. Runs on several threads.
-    void genotype_top_level_edits(const vector<nid_t>& nodes);
+    /// Genotype and stage, as top-level sites, the edit sites of the off-panel candidates
+    /// `candidates` (sorted) that no site holds. An edit site a site holds is one of that site's
+    /// children, genotyped and staged in its descent. Runs on several threads.
+    void genotype_top_level_edits(vector<EditCandidate> candidates);
 
 private:
     /// An off-panel candidate's edit site, as a child of the site holding it.

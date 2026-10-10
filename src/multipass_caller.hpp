@@ -255,8 +255,6 @@ private:
     EditCallBar edit_bar;
     /// What became of each candidate the call bar admitted, for the dump.
     unique_ptr<EditOutcomes> edit_outcomes;
-    /// The nodes of the reference paths, sorted, for the top-level edit sites.
-    vector<nid_t> reference_nodes() const;
     /// Write every off-panel candidate to `edit_dump`, if it is set.
     void write_edit_dump() const;
     /// Where a node's base lies on the reference: the contig and the 1-based position of the base

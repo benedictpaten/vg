@@ -499,12 +499,9 @@ vector<TreeGenotyper::HeldEdit> TreeGenotyper::edits_held_by(const SiteView& vie
     return held;
 }
 
-void TreeGenotyper::genotype_top_level_edits(const vector<nid_t>& nodes) {
+void TreeGenotyper::genotype_top_level_edits(vector<EditCandidate> candidates) {
     const PathPositionHandleGraph& graph = *parts.graph;
-    vector<EditCandidate> found;
-    parts.edit_source->for_each_edit_candidate(
-        nodes, [&](const EditCandidate& c) { found.push_back(c); });
-    const vector<EditCandidate> chosen = admitted(std::move(found));
+    const vector<EditCandidate> chosen = admitted(std::move(candidates));
 #pragma omp parallel for schedule(dynamic, 1)
     for (size_t i = 0; i < chosen.size(); ++i) {
         const EditCandidate& c = chosen[i];

@@ -81,8 +81,9 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
     walker.walk(recurse_type, snarl_batch_window, show_progress,
                 [&](const SiteView& site) { return tree_genotyper.genotype(site); });
     if (edit_source != nullptr) {
-        // The edit sites no site holds, now that every window the sites fetched has been counted.
-        tree_genotyper.genotype_top_level_edits(reference_nodes());
+        // The edit sites no site holds, from the windows the sites fetched. A window no site
+        // fetched holds no site, and is not fetched for its candidates alone.
+        tree_genotyper.genotype_top_level_edits(edit_source->counted_edit_candidates());
     }
     if (show_progress) {
         report_descent_instrumentation();
@@ -128,21 +129,6 @@ pair<string, int64_t> MultiPassCaller::reference_position(nid_t node, uint32_t o
         return false;
     });
     return found;
-}
-
-vector<nid_t> MultiPassCaller::reference_nodes() const {
-    vector<nid_t> nodes;
-    for (const string& name : ref_path_set) {
-        if (!graph.has_path(name)) {
-            continue;
-        }
-        graph.for_each_step_in_path(graph.get_path_handle(name), [&](const step_handle_t& step) {
-            nodes.push_back(graph.get_id(graph.get_handle_of_step(step)));
-        });
-    }
-    std::sort(nodes.begin(), nodes.end());
-    nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
-    return nodes;
 }
 
 void MultiPassCaller::write_edit_dump() const {
