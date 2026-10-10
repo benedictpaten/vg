@@ -814,10 +814,11 @@ TEST_CASE("A constraint no panel pair can follow routes through the wildcard",
     // The other side of the same behaviour. Here the constraint flips 1/1, 0/0, 0/1 at 100 bp
     // spacing. A panel explanation would have to switch both strands twice, at about 10.6 nats a
     // switch, against 4.6 nats per free strand for the wildcard, so the wildcard is the better
-    // answer and the model returns it.
+    // answer and the model returns it. The wildcard is a state only with mutation off.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 2.0;
+    p.mutation = 0.0;
     LinkageModel model(p);
     vector<LinkageModel::Site> sites{
         biallelic(1000, 0.0, -20.0, -20.0, {0, 1, 0, 1}),
@@ -841,11 +842,12 @@ TEST_CASE("A constraint no panel pair can follow routes through the wildcard",
 
 TEST_CASE("Phasing stays feasible where the panel cannot spell the call", "[linkage_model]") {
     // Panel enumeration makes this unreachable, but --enumerate-support does not, and returning
-    // nothing there would drop a whole chain over one site. The wildcard is what keeps the
-    // constrained problem solvable.
+    // nothing there would drop a whole chain over one site. With mutation off, the wildcard is what
+    // keeps the constrained problem solvable.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 2.0;
+    p.mutation = 0.0;
     LinkageModel model(p);
 
     vector<LinkageModel::Site> sites{
@@ -1317,21 +1319,22 @@ TEST_CASE("Every level is resolved, not only the first", "[linkage_model]") {
     REQUIRE(deep_now);
 }
 
-TEST_CASE("A nested site never names a haplotype that contradicts the allele chosen for it",
+TEST_CASE("A nested site names the haplotype its strand copies, in its strand's slot",
           "[linkage_model]") {
-    // Naming the wrong haplotype is worse than naming none. A consumer walking it reads a different
-    // sequence than the record states, and the two outputs then disagree about the same site with
-    // nothing to say which is wrong.
+    // The child's own haplotype is decoded with the parent's as an entering message. The message is
+    // a prior, not a constraint: decisive reads overrule it, and weak ones follow it.
     //
-    // The child's own haplotype is decoded with the parent's as an entering message, so the
-    // emission zeroes every panel state that spells a different allele, a named haplotype cannot
-    // disagree with the allele, and where none can spell it only the wildcard survives. The
-    // message is a prior, not a constraint: decisive reads overrule it, and weak ones follow it.
+    // With mutation on, a strand whose reads want an allele its haplotype does not carry keeps the
+    // haplotype and carries the allele as a mutation, so the record names that haplotype. With it
+    // off, only the wildcard can carry such an allele, and the record names no haplotype: a named
+    // haplotype then always carries the record's allele.
+    for (double mutation : {0.0, LinkageModel::Params().mutation}) {
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 1.0;
     p.scale = 100000.0;
     p.rho_min = 1e-4;
+    p.mutation = mutation;
 
     const size_t PARENT = 4, CHILD = 41;
 
@@ -1374,16 +1377,17 @@ TEST_CASE("A nested site never names a haplotype that contradicts the allele cho
         REQUIRE(other == LinkageModel::WILDCARD);
         REQUIRE(child->allele_first == child->allele_second);    // ploidy 1: one strand, one allele
         if (margin > 10.0) {
-            // An e^30 preference outweighs the chance of leaving the parent's haplotype, so the
-            // record says allele 1, which no panel haplotype spells here.
+            // An e^30 preference outweighs the chance of leaving the parent's haplotype, or of a
+            // mutation on it, so the record says allele 1, which no panel haplotype spells here.
             REQUIRE(child->allele_first == 1);
-            REQUIRE(named == LinkageModel::WILDCARD);
+            REQUIRE(named == (mutation > 0.0 ? 1 : LinkageModel::WILDCARD));
         } else {
             // An e^1 preference does not, so the child stays on the parent's haplotype and says
             // the allele it spells.
             REQUIRE(child->allele_first == 0);
             REQUIRE(named == 1);
         }
+    }
     }
 }
 

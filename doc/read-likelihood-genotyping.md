@@ -381,11 +381,11 @@ top-level linkage chain. A nested site takes its parent's phase set. Sites of on
 phased relative to one another. So a phase set spans a contig, or the part of one between ploidy
 changes, and does not mark where the phase is reliable.
 
-At some phaseable sites, both strands of the panel phase copy the
-[wildcard](read-likelihood-linkage-model.md#wildcard-haplotype) or a panel haplotype that does
-not pass through the site, so the panel does not order the two alleles. vg still writes them with
-`|`, in an order that carries no phase, and keeps the site in its phase set, so that read phasing,
-when on, can order it. No field marks these sites.
+At some phaseable sites the panel does not order the two alleles: the two strands' haplotypes carry
+the same allele there, or neither carries either chosen allele, so either strand could carry either
+(see [Phasing from the panel](read-likelihood-linkage-model.md#phasing-from-the-panel)). vg still
+writes them with `|`, in an order that carries no phase, and keeps the site in its phase set, so
+that read phasing, when on, can order it. No field marks these sites.
 
 Phasing is on wherever the linkage model runs. `--phased` makes vg call fail when the linkage model
 does not run (see [Settling genotypes](#settling-genotypes)), and `--no-phased` turns phasing off.
@@ -651,8 +651,8 @@ be walked, such as a `*` row.
 | `fragment` | the mosaic fragment's number; with `contig` and `strand`, it identifies one walk |
 | `ref_start`, `ref_end` | reference positions of the row's first and last sites, or, for a `ref` row that fills a gap, of the sites on either side; approximate, since the nodes define the row |
 | `start_node`, `end_node` | oriented node IDs (node ID times 2, plus 1 if reverse) where the row starts and ends |
-| `hap_index` | the panel haplotype's index in the `#haplotype` lines; `ref` on a row that follows the reference instead of a haplotype the strand copies; `*` on a row where the strand is on the wildcard |
-| `haplotype` | the panel haplotype's name, as its sample name and haplotype number joined by `#`; for a `ref` row, the reference's name in the panel; `*` on a wildcard row |
+| `hap_index` | the panel haplotype's index in the `#haplotype` lines; `ref` on a row that follows the reference instead of a haplotype the strand copies; `*` on a row where no haplotype is named for the strand |
+| `haplotype` | the panel haplotype's name, as its sample name and haplotype number joined by `#`; for a `ref` row, the reference's name in the panel; `*` on a row that names no haplotype |
 | `sites` | number of called sites the row covers, or `.` for a `ref` row that fills a gap; a `ref` row that replaces a segment keeps its count |
 | `gbwt_offset` | with `start_node`, a position in the graph's GBWT from which the haplotype can be followed to `end_node`; `.` if there is none |
 
@@ -661,7 +661,7 @@ expands to one walk in the graph, counting each shared node once. Each row lies 
 paths that store its panel haplotype, so a segment over several such paths gives several rows.
 `gbwt_offset` is valid only for the graph named in `#graph`, and `hap_index` only within one file;
 `haplotype` is the name to compare across files. A contig whose phased sites are all haploid has
-rows for strand 0 only. In a haploid region of a diploid contig, strand 1 is on the wildcard.
+rows for strand 0 only. In a haploid region of a diploid contig, strand 1 names no haplotype.
 
 #### Forming segments
 
@@ -678,9 +678,12 @@ that haplotype reaches back to the first. Where neither does, the stretch betwee
 the walk**. The gap is filled with the reference, on a `ref` row, if the reference is a panel
 haplotype that crosses it. The linkage model can have a strand copy a panel haplotype at a site that
 the haplotype does not pass through, as an
-[unknown allele](read-likelihood-linkage-model.md#wildcard-haplotype), so a segment's haplotype
+[unknown allele](read-likelihood-linkage-model.md#mutation-and-escape), so a segment's haplotype
 need not cover the whole segment. Such a segment is replaced by a `ref` row where the reference
-crosses it, and is otherwise a row that cannot be walked.
+crosses it, and is otherwise a row that cannot be walked. A strand can also carry another allele
+than its haplotype at a site, as a
+[mutation](read-likelihood-linkage-model.md#mutation-and-escape), and its segment then names that
+haplotype, whose walk spells the haplotype's allele there rather than the strand's.
 
 Three options change how the rows are formed, and the header records each choice:
 
@@ -688,9 +691,9 @@ Three options change how the rows are formed, and the header records each choice
   mosaic fragment starts after each.
 - `--no-mosaic-nested` leaves nested sites out of the segments, so a strand follows its enclosing
   site's haplotype through them.
-- Where a strand is on the [wildcard](read-likelihood-linkage-model.md#wildcard-haplotype), the
-  panel cannot name a haplotype for it. By default those sites are left out of the segments, and
-  the walk crosses them by the rule above. `--mosaic-break-unexplained` writes a `*` row for them
+- Where the linkage model names no haplotype for a strand, as for a nested haploid chain whose
+  strand it could not determine, those sites are left out of the segments by default, and the
+  walk crosses them by the rule above. `--mosaic-break-unexplained` writes a `*` row for them
   instead.
 
 ### Assembly anchors (`--anchors-out`)
@@ -806,7 +809,7 @@ are also rejected when those are not in use. Other general options used on this 
 | [Mismapping](read-likelihood-direct-genotyping.md#mismapping-probability) | `--mismap-min`, `--mismap-max`, `--no-mismap-term` |
 | [Mixture weights](read-likelihood-direct-genotyping.md#mixture-weights) | `--flat-mixture` |
 | [Depth term](read-likelihood-direct-genotyping.md#depth-term) | `--depth-term`, `--depth-count-raw` |
-| [Linkage](read-likelihood-linkage-model.md) | `--linkage-weight`, `--linkage-scale`, `--linkage-prior`, `--hp-prior`, `--hp-prior-run` |
+| [Linkage](read-likelihood-linkage-model.md) | `--linkage-weight`, `--linkage-scale`, `--linkage-prior`, `--linkage-mutation`, `--hp-prior`, `--hp-prior-run` |
 | [Nested sites](#nested-sites) | `--nested`, `--no-nested`, `--atomize-blocks`, `--no-atomize-blocks`, `--no-off-ref-nesting` |
 | [Ploidy](#ploidy) | `--ploidy`, `--ploidy-regex`, `--ploidy-bed` |
 | [Phasing](#phasing) | `--phased`, `--no-phased`, `--read-phasing`, `--no-read-phasing`, `--phase-min-q`, `--phase-coherence`, `--phase-coh-rounds`, `--phase-break`, `--phase-relink`, `--phase-hang`, `--phase-prior`, `--phase-cap` |
@@ -825,7 +828,7 @@ holds it.
 
 | Constant | Defined in | What it sets |
 |---|---|---|
-| `LinkageModel::Params::escape` | `src/linkage_model.hpp` | the escape penalty $\epsilon_{\mathrm{esc}}$ on a strand with an [unknown allele](read-likelihood-linkage-model.md#wildcard-haplotype) |
+| `LinkageModel::Params::escape` | `src/linkage_model.hpp` | the escape penalty $\epsilon_{\mathrm{esc}}$ on a strand with an [unknown allele](read-likelihood-linkage-model.md#mutation-and-escape) |
 | `LinkageModel::Params::rho_min` | `src/linkage_model.hpp` | the floor $\rho_{\min}$ in the switch probability (see [Transitions](read-likelihood-linkage-model.md#transitions)) |
 | `LinkageModel::Params::window`, `margin` | `src/linkage_model.hpp` | the number of sites each forward–backward window keeps, and the extra sites decoded and discarded on each side |
 | `RATE_BUCKET`, `RATE_ID_WINDOW` | `src/allele_likelihood.hpp` | reference bp per rate-window bucket (a rate window is three buckets), and node IDs per rate window when there are no reference positions |

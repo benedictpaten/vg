@@ -85,10 +85,13 @@ public:
         /// carries is explained by a mutation on the haplotype the strand copies, and the strand
         /// keeps copying it.
         ///
+        /// Fitted on chr20 over 1e-4 to 1e-2, where accuracy is flat; 3e-3 had the fewest
+        /// small-variant errors over the short-read and ONT arms together.
+        ///
         /// 0 turns mutation off. The states then include the wildcard haplotype, which carries an
         /// unknown allele at every site, and a strand reaches an allele no panel haplotype carries
         /// only by switching to it and back. At most 0.5.
-        double mutation = 0.0;
+        double mutation = 3e-3;
 
         /// Exponent F on the allele-frequency prior that the states imply. The probability
         /// collected for a genotype that c ordered panel pairs spell is multiplied by c^(F-1). 1
