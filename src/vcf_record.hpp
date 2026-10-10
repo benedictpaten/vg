@@ -171,6 +171,9 @@ struct SiteToWrite {
     /// Write the record even for a reference call, with alleles that were not called added, and
     /// trim the alleles only as far as the site's boundary nodes.
     bool genotype_snarls;
+    /// The site's ID, written as the record's. When null, the ID is printed from the bounds
+    /// (`site_name`).
+    const string* id = nullptr;
 };
 
 /// A site's traversals, numbered from 0, which build_site_record reads through these functions.

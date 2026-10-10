@@ -728,7 +728,9 @@ SiteRecord build_site_record(const PathPositionHandleGraph& graph, const SiteToW
     // Kept before flattening moves it: the position of the reference traversal's first base, from
     // which block offsets are measured.
     record.unflattened_position = out_variant.position;
-    out_variant.id = site_name(graph, site.start, site.end, options.translation, false);
+    out_variant.id = site.id != nullptr
+                         ? *site.id
+                         : site_name(graph, site.start, site.end, options.translation, false);
     out_variant.filter = "PASS";
     out_variant.updateAlleleIndexes();
 

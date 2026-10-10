@@ -111,6 +111,9 @@ public:
     /// Steps added to writing a site record by a caller that needs them. Each is left empty when
     /// not needed.
     struct SiteRecordSteps {
+        /// The site's ID, which names its records. When null, the ID is printed from the
+        /// snarl's bounds.
+        const string* id = nullptr;
         /// Whether called traversal `trav` is written as the reference allele, because it takes
         /// the reference traversal's route through the site.
         function<bool(const Snarl& site, const vector<SnarlTraversal>& travs, int trav,
@@ -183,15 +186,6 @@ public:
     /// What the three above print, from the snarl's two boundary visits.
     string print_snarl(nid_t start_id, bool start_backward, nid_t end_id, bool end_backward,
                        bool in_brackets) const;
-
-    /// A site's record key: the hash of the printed snarl, which is also the record's ID column.
-    /// A caller that keeps state per site keys it by this.
-    ///
-    /// A buffered line's key is the hash of its ID column, so the key must be the hash of that
-    /// string. It survives a node translation (see `set_translation`), where both sides print the
-    /// translated form. One function, so that every caller and the recovery of a key from a line
-    /// agree.
-    size_t record_key_of(const Snarl& snarl) const;
 
     /// convert a traversal into an allele string
     string trav_string(const HandleGraph& graph, const SnarlTraversal& trav) const;

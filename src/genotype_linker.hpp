@@ -89,7 +89,7 @@ public:
     /// with a reference path (see `NestingPlacement::retain_only`); the linkage pass files that
     /// chain if the sample carries it. Safe to call from several threads.
     ///
-    /// `record_key` names the site (see `VCFOutputCaller::record_key_of`), and `placement` places
+    /// `record_key` names the site (see `StagedSite::record_key`), and `placement` places
     /// it in the nesting tree. `ref_path_name` and `ref_offset` give the site's locus as for
     /// `site_locus`. `no_reference` marks a site that no reference path passes through:
     /// `ref_path_name` is then the reference path through the site's nearest ancestor on a

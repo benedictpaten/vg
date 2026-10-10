@@ -106,7 +106,7 @@ void RecordRenderer::collect_anchors(const StagedSite& rec, const vector<int>& g
     }
     anchors.collect(*info->anchor_evidence, info->explained_share,
                     phases.phase_ordered_genotype(rec.record_key, genotype),
-                    phases.haploid_slot(rec.record_key, genotype), reader.name(rec.bounds),
+                    phases.haploid_slot(rec.record_key, genotype), rec.id,
                     anchors.wants_leaf_test() ? rec.leaf : true,
                     anchor_gqn(rec, genotype, model), strands, rec.record_key);
 }

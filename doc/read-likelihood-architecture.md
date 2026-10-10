@@ -183,9 +183,9 @@ grouped by the step they serve; the driver and its walk come first.
 
 ## Words the headers use
 
-- **Record key.** A hash of the site's ID, the printed snarl: the record's VCF `ID` column, without
-  the `_<index>` suffix of a block record. Most tables that follow a site from pass to pass are
-  keyed by it.
+- **Record key.** A hash of the site's ID (`StagedSite::id`): the record's VCF `ID` column, without
+  the `_<index>` suffix of a block record. A site the decomposition holds is named by its printed
+  bounds. Most tables that follow a site from pass to pass are keyed by it.
 - **Level.** How deep in the descent a site was genotyped: 0 for a site the direct pass calls as
   top-level (including the children of a snarl it could not genotype), and its parent's level plus
   1 for a site reached by descent. Not `INFO/LV`, and not the gRef level of a contig.

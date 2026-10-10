@@ -232,14 +232,13 @@ bool GenotypeRescorer::rescore(
                 };
                 const auto a = best_of(before);
                 const auto b = best_of(target);
-                const string snarl_id = reader.name(rec.bounds);
                 std::ostringstream row;
-                row << snarl_id << "\t" << rec.ref_path_name << "\t"
+                row << rec.id << "\t" << rec.ref_path_name << "\t"
                     << rec.ref_offset << "\t" << rec.ploidy << "\t" << spell(a.first) << "\t"
                     << spell(b.first) << "\t" << (b.second - a.second) << "\t"
                     << pe->num_reads();
                 thread_ledger[qi].push_back(
-                    LedgerRow{rec.ref_path_name, (size_t)rec.ref_offset, snarl_id, row.str()});
+                    LedgerRow{rec.ref_path_name, (size_t)rec.ref_offset, rec.id, row.str()});
             }
         }
         thread_moved[qi] = moved;

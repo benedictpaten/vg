@@ -58,7 +58,9 @@ void MultiPassCaller::call(GraphCaller::RecurseType recurse_type,
             .ploidy_regions = &ploidy_regions,
             .ref_offsets = &ref_offsets,
             .ref_ploidies = &ref_ploidies,
-            .record_key_of = [this](const Snarl& site) { return output.record_key_of(site); },
+            .site_id = [this](const SiteBounds& site) {
+                return output.print_snarl(&graph, site.start, site.end);
+            },
         },
         TreeGenotyper::Options{
             .nested_calling = nested_calling,
@@ -135,6 +137,7 @@ VCFOutputCaller::SiteRecordSteps MultiPassCaller::record_steps(const StagedSite&
     // Each step reads the staged site rather than the Snarl and SnarlTraversals emit_variant
     // passes, which are the site's bounds and walks in another form.
     VCFOutputCaller::SiteRecordSteps steps;
+    steps.id = &site.id;
     if (nested_calling) {
         steps.same_as_reference = [this, &site](const Snarl&, const vector<SnarlTraversal>&,
                                                 int trav, int ref_trav_idx) {
@@ -202,9 +205,9 @@ void MultiPassCaller::finish_moved_record(vcflib::Variant& record) {
     if (quality.empty()) {
         return;
     }
-    // Keyed as `VCFOutputCaller::record_key_of` keys a site: by the hash of the record's ID, or of
-    // the site's ID for a block record.
-    auto found = quality.find(std::hash<string>{}(block_site_name(record.id)));
+    // Keyed by the site's record key: the hash of the record's ID, or of the site's ID for a block
+    // record.
+    auto found = quality.find(record_key_of(block_site_name(record.id)));
     if (found != quality.end()
         && !ReadLikelihoodSnarlCaller::rewrite_quality_for_chosen_genotype(
                record, sample_name, found->second, linkage_min_confidence)) {
@@ -261,9 +264,6 @@ void MultiPassCaller::install_widgets() {
                 sequence += graph.get_sequence(handle);
             }
             return sequence;
-        },
-        .name = [this](const SiteBounds& site) {
-            return output.print_snarl(&graph, site.start, site.end);
         },
     };
     linker.set_site_reader(reader);

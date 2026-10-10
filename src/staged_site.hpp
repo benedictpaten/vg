@@ -31,7 +31,12 @@ using namespace std;
 struct StagedSite {
     // Identity, and the site's place in the nesting tree.
 
-    /// See `VCFOutputCaller::record_key_of`.
+    /// The site's ID, as its records name it: their VCF `ID`, without a block record's suffix. A
+    /// site the decomposition holds is named by its bounds (`vg::site_name`), but a site need not
+    /// be, so the ID is kept rather than printed again from the bounds.
+    string id;
+    /// The hash of `id` (`vg::record_key_of`). The tables that follow a site from pass to pass are
+    /// keyed by it.
     size_t record_key = 0;
     /// The record key of the site this one is nested in, or 0 for a top-level site.
     size_t parent_record_key = 0;
@@ -128,8 +133,6 @@ struct SiteReader {
     const SiteGenotyper* genotyper = nullptr;
     /// A walk's sequence.
     function<string(const Traversal&)> spell;
-    /// A site's ID, as its records name it.
-    function<string(const SiteBounds&)> name;
 };
 
 /**

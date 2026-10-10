@@ -46,8 +46,8 @@ public:
         /// The offset and ploidy of each reference path.
         const map<string, size_t>* ref_offsets = nullptr;
         const map<string, int>* ref_ploidies = nullptr;
-        /// A site's record key (see `VCFOutputCaller::record_key_of`).
-        function<size_t(const Snarl&)> record_key_of;
+        /// The ID of the site with bounds `site`, as its records name it (see `StagedSite::id`).
+        function<string(const SiteBounds& site)> site_id;
     };
 
     /// Which sites below a top-level site are genotyped.
@@ -103,7 +103,7 @@ private:
     /// Make a site's `StagedSite` from its genotype, moving `call_info` into it. `travs` is left
     /// empty, because the sites below still read the traversals; the caller moves them in once
     /// those are done.
-    unique_ptr<StagedSite> stage_render_record(const Snarl& snarl,
+    unique_ptr<StagedSite> stage_render_record(const SiteBounds& bounds, const string& site_id,
                                                const vector<int>& trav_genotype, int ref_trav_idx,
                                                unique_ptr<SnarlCaller::CallInfo>& call_info,
                                                SiteScore* score, const string& ref_path_name,

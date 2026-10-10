@@ -97,10 +97,6 @@ bool VCFOutputCaller::add_variant(vcflib::Variant& var, size_t block) const {
     return true;
 }
 
-size_t VCFOutputCaller::record_key_of(const Snarl& snarl) const {
-    return vg::record_key_of(print_snarl(snarl, false));
-}
-
 void VCFOutputCaller::write_variants(ostream& out_stream, const SnarlManager* snarl_manager) {
     assert(include_nested == false || snarl_manager != nullptr);
     if (include_nested) {
@@ -427,6 +423,7 @@ bool VCFOutputCaller::emit_variant(const PathPositionHandleGraph& graph, SnarlCa
         .traversal_count = called_traversals.size(),
         .ploidy = ploidy,
         .genotype_snarls = genotype_snarls,
+        .id = record_steps.id,
     };
     SiteRecord record = build_site_record(graph, site, alleles, hooks, record_options());
     vcflib::Variant& out_variant = record.variant;
