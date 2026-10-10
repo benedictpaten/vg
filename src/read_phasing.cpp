@@ -125,7 +125,8 @@ double phase_link(const PhaseSite& a, const PhaseSite& b, double cap) {
 }
 
 unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasingParams& params,
-                                       ReadPhasingCounters& counters) {
+                                       ReadPhasingCounters& counters,
+                                       unordered_set<size_t>* read_ordered) {
     unordered_set<size_t> flips;
     if (sites.empty()) {
         return flips;
@@ -173,6 +174,7 @@ unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasi
     });
     vector<ReadPhasingCounters> set_counters(phase_sets.size());
     vector<vector<size_t>> set_flips(phase_sets.size());
+    vector<vector<size_t>> set_read_ordered(phase_sets.size());
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (size_t rank = 0; rank < by_length.size(); ++rank) {
@@ -191,7 +193,8 @@ unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasi
         vector<size_t> rel;
         vector<size_t> unrel;
         for (size_t t = 0; t < n; ++t) {
-            if (sites[begin + t].reliability >= params.reliability) {
+            if (sites[begin + t].reliability >= params.reliability
+                && sites[begin + t].panel_ordered) {
                 rel.push_back(t);
             } else {
                 unrel.push_back(t);
@@ -378,7 +381,7 @@ unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasi
                 for (size_t k = split; k < rel.size() && k - split < per_side; ++k) {
                     link(rel[k]);
                 }
-                if (params.panel_weight > 0.0 && !rel.empty()) {
+                if (params.panel_weight > 0.0 && !rel.empty() && sites[begin + t].panel_ordered) {
                     // The panel says this site keeps the order it came in with, relative to its
                     // neighbour's. Weak, and only decisive when the reads say nothing. The
                     // nearest reliable site is on one side of `t` or the other; on a tie, the
@@ -396,6 +399,8 @@ unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasi
                 }
                 if (used == 0) {
                     ++counters.hung_no_reads;
+                } else if (!sites[begin + t].panel_ordered) {
+                    set_read_ordered[set_index].push_back(sites[begin + t].record_key);
                 }
                 // Flipped only on a vote against the panel's order; a tie keeps it.
                 o[t] = s < 0.0 ? 1 : 0;
@@ -426,6 +431,9 @@ unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasi
         counters.coherence_rounds_run = max(counters.coherence_rounds_run, c.coherence_rounds_run);
         for (size_t key : set_flips[i]) {
             flips.insert(key);
+        }
+        if (read_ordered != nullptr) {
+            read_ordered->insert(set_read_ordered[i].begin(), set_read_ordered[i].end());
         }
     }
     return flips;

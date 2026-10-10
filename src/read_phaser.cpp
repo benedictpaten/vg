@@ -75,6 +75,7 @@ void ReadPhaser::phase(
             }
             site.record_key = rec.record_key;
             site.position = pc.position;
+            site.panel_ordered = !pc.order_arbitrary;
             block_sites[b].push_back(std::move(site));
             block_calls[b].push_back(found->second);
         }
@@ -96,7 +97,8 @@ void ReadPhaser::phase(
         return;
     }
 
-    strands.flips() = read_phase_flips(sites, params, counters);
+    strands.read_ordered().clear();
+    strands.flips() = read_phase_flips(sites, params, counters, &strands.read_ordered());
 
     // Apply by swapping the chosen pair's order, and carry the swaps down the nesting tree. Nested
     // sites are reordered too. Block records spell the phase in their ALTs, so reordering a nested

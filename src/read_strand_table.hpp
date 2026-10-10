@@ -54,6 +54,9 @@ public:
     /// read's strand log-odds enter with the opposite sign.
     unordered_set<size_t>& flips() { return phase_flips; }
     const unordered_set<size_t>& flips() const { return phase_flips; }
+    /// The sites the panel does not order whose reads ordered them (see `PhaseSite::panel_ordered`).
+    unordered_set<size_t>& read_ordered() { return ordered_by_reads; }
+    const unordered_set<size_t>& read_ordered() const { return ordered_by_reads; }
 
     /// Sum each read's strand log-odds over `sites()`, for the anchors, once `sites()` and
     /// `flips()` are final. `calls` gives each site's phase set, which `phase_set_id` numbers.
@@ -82,6 +85,7 @@ public:
 protected:
     vector<PhaseSite> phase_sites;
     unordered_set<size_t> phase_flips;
+    unordered_set<size_t> ordered_by_reads;
 
     /// Each read's strand log-odds, from `build_lambda`. Positive means strand 0 of the read's
     /// phase set, which is GT field 0 and anchor slot 0. Keyed by read alone, as a homozygous

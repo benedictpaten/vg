@@ -1001,6 +1001,10 @@ int64_t MultiPassCaller::phase_record_genotype(size_t record_key,
         return -1;
     }
     const LinkageCollector::PhaseCall& phase = *found;
+    if (phase.order_arbitrary && !read_strands.read_ordered().count(record_key)) {
+        // Neither the panel nor the reads order the pair, so the record claims no phase.
+        return -1;
+    }
     // `find`, since `operator[]` would insert a default 0 on a miss, and the map's size is not
     // a bound on traversal indices.
     const auto found_a = trav_to_allele.find(phase.trav_first);

@@ -90,6 +90,11 @@ struct PhaseSite {
     /// Mean of the rows' confidences (see `read_confidence`). Low where the reads cannot tell the
     /// two alleles apart. A site is reliable when this is at least `ReadPhasingParams::reliability`.
     double reliability = 0.0;
+    /// Whether the panel orders the site's pair. It does not where no panel haplotype tells the
+    /// strands apart (`PhaseCall::order_arbitrary`), as for a heterozygote whose ALT no haplotype
+    /// carries. Such a site gives no panel order to anything: it never joins the chain, whose
+    /// pieces fall back on the panel's order, and it is ordered by its reads alone.
+    bool panel_ordered = true;
 };
 
 /// A read's confidence at a site: the phred-scaled probability that its better allele is wrong,
@@ -180,8 +185,11 @@ double phase_link(const PhaseSite& a, const PhaseSite& b, double cap);
 /// panel's order, so with no read evidence nothing is swapped. Breaks are relinked from left to
 /// right, each piece taking its orientation from the piece before it as that piece now stands. A
 /// hung site whose votes sum to exactly zero keeps the panel's order.
+///
+/// `read_ordered`, if given, receives the sites the panel does not order whose reads ordered them.
 unordered_set<size_t> read_phase_flips(vector<PhaseSite>& sites, const ReadPhasingParams& params,
-                                       ReadPhasingCounters& counters);
+                                       ReadPhasingCounters& counters,
+                                       unordered_set<size_t>* read_ordered = nullptr);
 
 }
 
