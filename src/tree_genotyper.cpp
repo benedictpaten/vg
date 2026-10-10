@@ -466,11 +466,13 @@ vector<TreeGenotyper::HeldEdit> TreeGenotyper::edits_held_by(const SiteView& vie
     vector<EditCandidate> found;
     const nid_t start = graph.get_id(bounds.start);
     const nid_t end = graph.get_id(bounds.end);
+    // Only where the site's own read query counted its window: a site too wide for the cache
+    // holds no edit site, which would otherwise fetch every window it spans whole.
     parts.edit_source->for_each_edit_candidate(nodes, [&](const EditCandidate& c) {
         if (c.node != start && c.node != end) {
             found.push_back(c);
         }
-    });
+    }, false);
     vector<HeldEdit> held;
     if (found.empty()) {
         return held;

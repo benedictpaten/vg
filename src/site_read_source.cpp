@@ -179,9 +179,11 @@ const vector<EditCandidate>& InMemorySiteReadSource::all_edits() const {
     return edits;
 }
 
-void InMemorySiteReadSource::for_each_edit_candidate(
-    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {
+bool InMemorySiteReadSource::for_each_edit_candidate(
+    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee,
+    bool fetch_wide) const {
     for_each_candidate_on(all_edits(), nodes, iteratee);
+    return true;
 }
 
 vector<EditCandidate> InMemorySiteReadSource::counted_edit_candidates() const {
@@ -529,10 +531,15 @@ const vector<EditCandidate>& WindowedSiteReadSource::window_edits(size_t window)
     return edits.emplace(window, std::move(counted)).first->second;
 }
 
-void WindowedSiteReadSource::for_each_edit_candidate(
-    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {
-    if (edit_graph == nullptr) {
-        return;
+bool WindowedSiteReadSource::for_each_edit_candidate(
+    const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee,
+    bool fetch_wide) const {
+    if (edit_graph == nullptr || nodes.empty()) {
+        return true;
+    }
+    if (!fetch_wide && window_of(nodes.front()) != window_of(nodes.back())) {
+        // A site this wide is fetched uncached, so its windows need not have been counted.
+        return false;
     }
     size_t i = 0;
     while (i < nodes.size()) {
@@ -546,6 +553,7 @@ void WindowedSiteReadSource::for_each_edit_candidate(
         for_each_candidate_on(window_edits(window), in_window, iteratee);
         i = j;
     }
+    return true;
 }
 
 vector<EditCandidate> WindowedSiteReadSource::counted_edit_candidates() const {

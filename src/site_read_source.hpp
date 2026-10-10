@@ -121,8 +121,14 @@ public:
     /// Visit the off-panel candidates on the nodes `nodes`, which are sorted and free of
     /// duplicates, in order. A node's candidates are always all of them: reads not yet counted
     /// are fetched and counted first. Nothing is visited unless `count_edits` was called.
-    virtual void for_each_edit_candidate(
-        const vector<nid_t>& nodes, const function<void(const EditCandidate&)>& iteratee) const {}
+    ///
+    /// Without `fetch_wide`, nodes that a site query would fetch uncached, as one too wide for
+    /// the source's cache, are not counted for this: nothing is visited and false is returned.
+    virtual bool for_each_edit_candidate(const vector<nid_t>& nodes,
+                                         const function<void(const EditCandidate&)>& iteratee,
+                                         bool fetch_wide = true) const {
+        return true;
+    }
 
     /// Every off-panel candidate counted so far, sorted.
     virtual vector<EditCandidate> counted_edit_candidates() const { return {}; }
@@ -167,8 +173,9 @@ public:
 
     /// Every read is in memory, so all of them are counted at once, at the first query.
     void count_edits(const HandleGraph* graph, const EditCountParams& params);
-    void for_each_edit_candidate(const vector<nid_t>& nodes,
-                                 const function<void(const EditCandidate&)>& iteratee) const;
+    bool for_each_edit_candidate(const vector<nid_t>& nodes,
+                                 const function<void(const EditCandidate&)>& iteratee,
+                                 bool fetch_wide = true) const;
     vector<EditCandidate> counted_edit_candidates() const;
 
 private:
@@ -230,8 +237,9 @@ public:
     /// published, and only on the window's own nodes, so each read base is counted once however
     /// often its window is fetched. The candidates are kept for the whole run.
     void count_edits(const HandleGraph* graph, const EditCountParams& params) final;
-    void for_each_edit_candidate(const vector<nid_t>& nodes,
-                                 const function<void(const EditCandidate&)>& iteratee) const final;
+    bool for_each_edit_candidate(const vector<nid_t>& nodes,
+                                 const function<void(const EditCandidate&)>& iteratee,
+                                 bool fetch_wide = true) const final;
     vector<EditCandidate> counted_edit_candidates() const final;
 
     size_t get_filtered_count() const;
