@@ -221,7 +221,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
     enum class StrandKind { Carried, Empty, Unexplained };
     auto strand_kind = [&](size_t t, int strand) -> StrandKind {
         const size_t hap = strand == 0 ? phasing[t].hap_first : phasing[t].hap_second;
-        if (hap != LinkageModel::WILDCARD) {
+        if (hap != LinkageModel::NO_HAPLOTYPE) {
             return StrandKind::Carried;
         }
         if (phasing[t].nested_strand >= 0 && (int)phasing[t].nested_strand != strand) {
@@ -239,7 +239,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
     // name, since the index follows GBWT metadata order. `params.reference_paths` holds full path
     // names (CHM13#0#chr20) and the panel names haplotypes as sample#phase (CHM13#0), so the
     // contig is dropped before matching.
-    size_t reference_hap = LinkageModel::WILDCARD;
+    size_t reference_hap = LinkageModel::NO_HAPLOTYPE;
     for (const string& full : params.reference_paths) {
         // Never a gRef path: a gRef cover is stitched together from many donors, and it is not in the
         // panel.
@@ -255,12 +255,12 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                 break;
             }
         }
-        if (reference_hap != LinkageModel::WILDCARD) {
+        if (reference_hap != LinkageModel::NO_HAPLOTYPE) {
             break;
         }
     }
     cerr << "[vg call] mosaic: reference "
-         << (reference_hap == LinkageModel::WILDCARD
+         << (reference_hap == LinkageModel::NO_HAPLOTYPE
                  ? string("is NOT a panel haplotype, so gaps cannot be patched with it")
                  : "is panel haplotype " + std::to_string(reference_hap))
          << endl;
@@ -287,7 +287,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
 
     std::function<void(size_t, size_t, int, size_t, StrandKind)> emit_span =
         [&](size_t from, size_t to, int strand, size_t hap, StrandKind kind) {
-        gbwt::edge_type pos = (hap == LinkageModel::WILDCARD)
+        gbwt::edge_type pos = (hap == LinkageModel::NO_HAPLOTYPE)
                                   ? gbwt::invalid_edge()
                                   : walk.gbwt_position(site(from).start_node, hap);
 
@@ -340,7 +340,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                     // this one, not only through the same node.
                     const size_t nh2 = strand == 0 ? site(b_idx + 1).hap_first
                                                    : site(b_idx + 1).hap_second;
-                    const gbwt::edge_type entry = nh2 == LinkageModel::WILDCARD
+                    const gbwt::edge_type entry = nh2 == LinkageModel::NO_HAPLOTYPE
                                                       ? gbwt::invalid_edge()
                                                       : walk.gbwt_position(next_start, nh2);
                     right = np != gbwt::invalid_edge()
@@ -359,7 +359,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                     to_node = b.end_node;
                     pending_from_node = b.end_node;
                     const size_t nh = strand == 0 ? nx.hap_first : nx.hap_second;
-                    pending_from_pos = nh == LinkageModel::WILDCARD
+                    pending_from_pos = nh == LinkageModel::NO_HAPLOTYPE
                                            ? gbwt::invalid_edge()
                                            : walk.gbwt_position(b.end_node, nh);
                     ++counters.nested_leave;
@@ -373,7 +373,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                     const size_t nh = strand == 0 ? site(b_idx + 1).hap_first
                                                   : site(b_idx + 1).hap_second;
                     bool closed = false;
-                    if (nh != LinkageModel::WILDCARD) {
+                    if (nh != LinkageModel::NO_HAPLOTYPE) {
                         const gbwt::edge_type here = walk.gbwt_position(b.end_node, nh);
                         const gbwt::edge_type there = walk.gbwt_position(next_start, nh);
                         const gbwt::edge_type mine = walk.gbwt_position(b.end_node, hap);
@@ -390,7 +390,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                         // Neither haplotype crosses the gap, so fill it with the reference, if it
                         // crosses. The fill is contiguous but says little about the sample, so the
                         // row records what it filled.
-                        if (patch_gaps && reference_hap != LinkageModel::WILDCARD) {
+                        if (patch_gaps && reference_hap != LinkageModel::NO_HAPLOTYPE) {
                             const gbwt::edge_type rl =
                                 walk.gbwt_position(b.end_node, reference_hap);
                             const gbwt::edge_type rr =
@@ -454,9 +454,9 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             // or where an extension moved the start.
             const bool carry_applies = carry != gbwt::ENDMARKER
                                        && (int64_t)gbwt::Node::id(carry) == from_node;
-            if (hap != LinkageModel::WILDCARD) {
+            if (hap != LinkageModel::NO_HAPLOTYPE) {
                 walkable = start_and_walk(hap, &row_pos, &row_end);
-                if (!walkable && patch_gaps && reference_hap != LinkageModel::WILDCARD
+                if (!walkable && patch_gaps && reference_hap != LinkageModel::NO_HAPLOTYPE
                     && start_and_walk(reference_hap, &row_pos, &row_end)) {
                     as_ref = true;
                     walkable = true;
@@ -468,7 +468,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             // than none. This happens at an inversion, whose ends the haplotype traverses in
             // reverse; such a row cannot join the row before it, so the fragment breaks there.
             bool direction_broken = false;
-            if (!walkable && hap != LinkageModel::WILDCARD
+            if (!walkable && hap != LinkageModel::NO_HAPLOTYPE
                 && start_and_walk(hap, &row_pos, &row_end, true)) {
                 walkable = true;
                 direction_broken = carry_applies && row_pos.first != carry;
@@ -480,8 +480,8 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             // across a site, which the linkage model allows, so the row falls back to the
             // reference, and the carried direction, inherited from an inverted row, may not match
             // the reference's.
-            if (!walkable && patch_gaps && hap != LinkageModel::WILDCARD
-                && reference_hap != LinkageModel::WILDCARD
+            if (!walkable && patch_gaps && hap != LinkageModel::NO_HAPLOTYPE
+                && reference_hap != LinkageModel::NO_HAPLOTYPE
                 && start_and_walk(reference_hap, &row_pos, &row_end, true)) {
                 as_ref = true;
                 walkable = true;
@@ -499,7 +499,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             // A row whose direction was broken starts a new fragment, since it cannot join the row
             // before it; the row after it can join it as usual. A row with no position stands
             // alone, breaking on both sides.
-            if (hap == LinkageModel::WILDCARD || !walkable || direction_broken) {
+            if (hap == LinkageModel::NO_HAPLOTYPE || !walkable || direction_broken) {
                 ++fragment;
             }
             // Oriented node IDs, `id * 2 + is_reverse`, as vg encodes them, since two segments can
@@ -516,7 +516,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                 out << "ref\t"
                     << (reference_hap < params.haplotype_names.size()
                             ? params.haplotype_names[reference_hap] : string("?"));
-            } else if (hap == LinkageModel::WILDCARD) {
+            } else if (hap == LinkageModel::NO_HAPLOTYPE) {
                 // The strand passes through here, and the panel cannot name a haplotype for it.
                 out << "*\t*";
                 ++unexplained_segments;
@@ -527,7 +527,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             }
             out << "\t" << (b_idx - a_idx + 1) << "\t";
             if (row_pos == gbwt::invalid_edge()) {
-                // No position: the strand is the wildcard, or the haplotype does not cross this run
+                // No position: no haplotype is named, or the haplotype does not cross this run
                 // in the graph. "." rather than 0, which would be a valid offset. Panel haplotypes
                 // are often clipped, so the second case is common.
                 out << ".";
@@ -572,12 +572,12 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                 ++fragment;
             }
             // A row with no position ends the fragment, since no consumer could walk across it.
-            if (hap == LinkageModel::WILDCARD || !walkable) {
+            if (hap == LinkageModel::NO_HAPLOTYPE || !walkable) {
                 ++fragment;
             }
         };
 
-        if (pos == gbwt::invalid_edge() && hap != LinkageModel::WILDCARD && from != to) {
+        if (pos == gbwt::invalid_edge() && hap != LinkageModel::NO_HAPLOTYPE && from != to) {
             // The run's first site is not in the graph for this haplotype, but a later one may be, so
             // find the first site that resolves and write the walkable rest separately, rather than
             // giving up on the run or patching sites whose haplotype is known.
@@ -602,7 +602,7 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
             return;
         }
         if (pos == gbwt::invalid_edge() || from == to) {
-            if (pos == gbwt::invalid_edge() && hap != LinkageModel::WILDCARD) {
+            if (pos == gbwt::invalid_edge() && hap != LinkageModel::NO_HAPLOTYPE) {
                 ++counters.unwalkable;
             }
             emit_row(from, to, pos);
@@ -664,11 +664,11 @@ void MosaicWriter::write(const vector<LinkageCollector::PhaseCall>& phasing,
                 if (!keep_nested && phasing[t].level > 0) {
                     continue;
                 }
-                // A stretch the panel cannot explain with few switches: the wildcard. Its alleles may
-                // all be carried by panel haplotypes; what is missing is a panel walk through the
-                // stretch. By default the flanking haplotype is carried through, keeping the strand
-                // one path, at the cost of writing that haplotype's sequence across those sites
-                // rather than the called alleles. With `connect_unexplained` off, the hole is left.
+                // A stretch where no haplotype is named for the strand, as on a nested strand that
+                // could not be placed. By default the flanking haplotype is carried through,
+                // keeping the strand one path, at the cost of writing that haplotype's sequence
+                // across those sites rather than the called alleles. With `connect_unexplained`
+                // off, the hole is left.
                 if (connect_unexplained
                     && strand_kind(t, strand) == StrandKind::Unexplained) {
                     continue;

@@ -333,7 +333,7 @@ TEST_CASE("A strand from another phase set is NaN in the anchor path, and no str
 
 TEST_CASE("A parent's phase swap carries its nested strands and their haplotypes with it",
           "[graph_caller]") {
-    const size_t W = LinkageModel::WILDCARD;
+    const size_t W = LinkageModel::NO_HAPLOTYPE;
     // Diploid parent 1, swapped by read phasing. Its ploidy-1 child 2 is on strand 1 with
     // haplotype 7, and 2's own ploidy-1 child 3 is on strand 0 with haplotype 5. Diploid child 4 is
     // not swapped, so its ploidy-1 child 5 keeps its strand.

@@ -184,8 +184,8 @@ void help_call(char** argv) {
          << "                            [5]" << endl
          << "      --linkage-mutation P  chance that a strand carries another allele than the" << endl
          << "                            haplotype it copies, so that an allele no haplotype" << endl
-         << "                            carries is a mutation on one; 0 uses a wildcard" << endl
-         << "                            haplotype instead [" << LinkageModel::Params().mutation << "]" << endl
+         << "                            carries is a mutation on one ["
+         << LinkageModel::Params().mutation << "]" << endl
          << "      --hp-prior F          exponent used instead of --linkage-prior where an" << endl
          << "                            allele differs from the reference only in the" << endl
          << "                            length of a homopolymer run; 0 disables it [0]" << endl
@@ -1273,8 +1273,9 @@ int main_call(int argc, char** argv) {
     // genotyped, so we can afford to look for more of them.
     max_yens_traversals = traversals_only ? 100 : 50;
 
-    if (!(linkage_mutation >= 0.0 && linkage_mutation <= 0.5)) {
-        cerr << "error [vg call]: --linkage-mutation takes a probability from 0 to 0.5" << endl;
+    if (!(linkage_mutation > 0.0 && linkage_mutation <= 0.5)) {
+        cerr << "error [vg call]: --linkage-mutation takes a probability above 0 and at most 0.5"
+             << endl;
         return 1;
     }
     if (hp_prior < 0.0 || hp_prior_run < 1) {
@@ -2699,7 +2700,7 @@ int main_call(int argc, char** argv) {
                 // and phase, so they would form one haplotype stitched together from many donors.
                 // The gref copy of a base reference path is left out only if the base path's
                 // sample is also present, so that the reference is in the panel once. Sequences
-                // left out are mapped to WILDCARD; the vector's default of 0 would put them in
+                // left out are mapped to NO_HAPLOTYPE; the vector's default of 0 would put them in
                 // haplotype 0.
                 const string path_sample = (size_t)name.sample < meta.sample_names.size()
                                                ? meta.sample(name.sample) : string();
@@ -2714,7 +2715,7 @@ int main_call(int argc, char** argv) {
                     for (gbwt::size_type orientation = 0; orientation < 2; ++orientation) {
                         gbwt::size_type seq = gbwt::Path::encode(path, orientation);
                         if (seq < linkage_sequence_to_haplotype.size()) {
-                            linkage_sequence_to_haplotype[seq] = LinkageModel::WILDCARD;
+                            linkage_sequence_to_haplotype[seq] = LinkageModel::NO_HAPLOTYPE;
                         }
                     }
                     continue;

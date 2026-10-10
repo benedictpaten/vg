@@ -590,20 +590,20 @@ void MultiPassCaller::finalise_linkage_outputs() {
             ++phased_unwritten;
             continue;
         }
-        // Count only the strands a site has. A haploid site has one strand and a wildcard, and the
-        // wildcard can be in either slot: a haploid contig fills the first slot, while a nested
-        // site on its parent's second strand fills the second.
+        // Count only the strands a site has. A haploid site has one strand and an empty slot, and
+        // the empty slot can be either: a haploid contig fills the first slot, while a nested site
+        // on its parent's second strand fills the second.
         unexplained += (pc.ploidy == 1)
-                       ? (pc.hap_first == LinkageModel::WILDCARD
-                          && pc.hap_second == LinkageModel::WILDCARD)
-                       : (pc.hap_first == LinkageModel::WILDCARD
-                          || pc.hap_second == LinkageModel::WILDCARD);
+                       ? (pc.hap_first == LinkageModel::NO_HAPLOTYPE
+                          && pc.hap_second == LinkageModel::NO_HAPLOTYPE)
+                       : (pc.hap_first == LinkageModel::NO_HAPLOTYPE
+                          || pc.hap_second == LinkageModel::NO_HAPLOTYPE);
         order_arbitrary += pc.order_arbitrary;
     }
     linker.report();
     if (emit_phasing) {
-        // At sites where a strand is on the wildcard, no panel haplotype names it, so the phase
-        // across them rests on the transitions alone.
+        // At sites where a strand names no panel haplotype, the phase across them rests on the
+        // transitions alone.
         cerr << "[vg call] phasing: " << (phase_table.calls().size() - phased_unwritten)
              << " sites phased, " << unexplained
              << " with a strand the panel does not explain" << endl;

@@ -74,9 +74,9 @@ public:
         /// Floor on the switch probability, so that a switch is never impossible.
         double rho_min = 1e-3;
 
-        /// Escape probability for each strand whose allele is unknown, because it copies the
-        /// wildcard haplotype or a panel haplotype that does not pass through the site. Such a
-        /// strand can carry any candidate allele.
+        /// Escape probability for each strand whose allele is unknown, because it copies a panel
+        /// haplotype that does not pass through the site. Such a strand carries each candidate
+        /// allele with probability escape / (alleles).
         double escape = 1e-2;
 
         /// Li-Stephens mutation probability. A strand that copies a panel haplotype carries that
@@ -86,11 +86,8 @@ public:
         /// keeps copying it.
         ///
         /// Fitted on chr20 over 1e-4 to 1e-2, where accuracy is flat; 3e-3 had the fewest
-        /// small-variant errors over the short-read and ONT arms together.
-        ///
-        /// 0 turns mutation off. The states then include the wildcard haplotype, which carries an
-        /// unknown allele at every site, and a strand reaches an allele no panel haplotype carries
-        /// only by switching to it and back. At most 0.5.
+        /// small-variant errors over the short-read and ONT arms together. Above 0 and at most
+        /// 0.5: at 0 a genotype that no panel pair spells could not be called.
         double mutation = 3e-3;
 
         /// Exponent F on the allele-frequency prior that the states imply. The probability
@@ -161,21 +158,14 @@ public:
         ///
         /// A group is phased with its parent as its first site, and the parent's phase is already
         /// chosen. Pinning the parent keeps the path from swapping its strands, which would phase
-        /// the group against the wrong strands. `(size_t)-1` is `WILDCARD`, which is declared
-        /// below.
+        /// the group against the wrong strands. `(size_t)-1` is `NO_HAPLOTYPE`, which is declared
+        /// below; a pin that names it is not applied.
         bool pinned = false;
         size_t pin_first = (size_t)-1;
         size_t pin_second = (size_t)-1;
     };
 
     LinkageModel(const Params& params) : params(params) {}
-
-    /// Whether the states include the wildcard haplotype: only when mutation is off.
-    bool has_wildcard() const { return params.mutation <= 0.0; }
-
-    /// Number of states per strand over a panel of `n_hap` haplotypes: the haplotypes, then the
-    /// wildcard where there is one.
-    size_t num_states(size_t n_hap) const { return n_hap + (has_wildcard() ? 1 : 0); }
 
     /// True when the model is on, that is, when its weight is positive. The caller checks this
     /// rather than running the model at weight 0.
@@ -198,16 +188,15 @@ public:
     vector<vector<double>> posteriors(const vector<Site>& sites, size_t ploidy = 2,
                                       const vector<double>* alpha_in = nullptr) const;
 
-    /// One strand's assignment at one site: an index into the panel, or `WILDCARD`.
+    /// One strand's assignment at one site: an index into the panel, or `NO_HAPLOTYPE`.
     struct Phase {
-        size_t first = WILDCARD;
-        size_t second = WILDCARD;
+        size_t first = NO_HAPLOTYPE;
+        size_t second = NO_HAPLOTYPE;
     };
 
-    /// The wildcard haplotype's index. It can carry any allele at any site, so a strand
-    /// assigned to it is explained by no panel haplotype. With mutation on there is no wildcard
-    /// state, and the value only marks a strand for which no haplotype is named.
-    static constexpr size_t WILDCARD = (size_t)-1;
+    /// Marks a strand for which no panel haplotype is named: the second strand of a ploidy-1
+    /// site, or a nested strand that could not be placed.
+    static constexpr size_t NO_HAPLOTYPE = (size_t)-1;
 
     /// Whether the reference allele `ref` and another allele differ only in the length of one
     /// homopolymer run, by 1-49 copies of its base, in a run that is at least `min_run` long in
@@ -225,11 +214,11 @@ public:
     ///
     /// `constraint[t]` is the genotype index the path must spell at site `t`, or `NO_CONSTRAINT`
     /// to leave the site free. Constraining every site to its chosen genotype makes the
-    /// phasing agree with the VCF. A constrained path always exists, because a mutation, or
-    /// with mutation off the wildcard, can carry any allele.
+    /// phasing agree with the VCF. A constrained path always exists, because a mutation can
+    /// carry any allele.
     ///
     /// At `ploidy` 1 there is one strand, so the result gives only the panel haplotype it
-    /// copies at each site, with `second` the wildcard. As for `posteriors()`, the two
+    /// copies at each site, with `second` `NO_HAPLOTYPE`. As for `posteriors()`, the two
     /// ploidies share this entry point.
     ///
     /// A group's parent fixes the group's starting state in one of two ways. A ploidy-2 group
@@ -292,7 +281,7 @@ private:
 
 
     /// Emission over single haplotypes for a haploid site: `e[a]` is the relative likelihood of
-    /// the allele haplotype `a` carries, with the wildcard, where there is one, last.
+    /// the allele haplotype `a` carries.
     void haploid_emission(const Site& site, size_t n_hap, vector<double>& e,
                           vector<double>& per_allele) const;
 
@@ -422,7 +411,7 @@ public:
         size_t record_key = 0;
         string contig;
         size_t position = 0;
-        /// The VCF allele on each strand, or `LinkageModel::WILDCARD` where the site's
+        /// The VCF allele on each strand, or the largest `size_t` where the site's
         /// traversal-to-allele map was not yet known when the site was phased (see
         /// `set_allele_map`). A record's GT is phased from `trav_first` and `trav_second`, which
         /// are always known.
@@ -433,12 +422,10 @@ public:
         /// candidate traversal.
         int trav_first = -1;
         int trav_second = -1;
-        /// The panel haplotype each strand copies here, which the mosaic writes;
-        /// `LinkageModel::WILDCARD` where no panel haplotype is named for the strand. With
-        /// mutation on, a strand whose allele no panel haplotype carries still names the
-        /// haplotype it copies.
-        size_t hap_first = LinkageModel::WILDCARD;
-        size_t hap_second = LinkageModel::WILDCARD;
+        /// The panel haplotype each strand copies here, which the mosaic writes, whether or not it
+        /// carries the strand's allele; `LinkageModel::NO_HAPLOTYPE` where none is named.
+        size_t hap_first = LinkageModel::NO_HAPLOTYPE;
+        size_t hap_second = LinkageModel::NO_HAPLOTYPE;
         /// 1 or 2. At 1 only the `_first` fields are meaningful: there is one strand.
         size_t ploidy = 2;
         /// The site's boundary nodes. The mosaic locates sites by these, since a reference

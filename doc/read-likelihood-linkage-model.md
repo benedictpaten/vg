@@ -153,10 +153,6 @@ $$
 P(b \mid h) = \frac{\epsilon_{\mathrm{esc}}}{\lvert A_{\mathrm{c}} \rvert}
 $$
 
-`--linkage-mutation 0` turns mutation off. The model then adds a **wildcard** haplotype to the
-panel, a state that carries an unknown allele at every site, and a strand can carry an allele that
-no panel haplotype carries only by switching to the wildcard and back.
-
 ## Transitions
 
 Between consecutive sites $d$ bases apart, each strand independently keeps copying the same

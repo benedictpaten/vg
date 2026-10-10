@@ -228,16 +228,12 @@ static inline int traversal_of(const vector<uint16_t>& trav_arena, size_t trav_o
     return at < trav_arena.size() ? (int)trav_arena[at] : -1;
 }
 
-/// Relative P(reads | state) for every ordered pair of the `m` states per strand, scaled so that
-/// the site's best genotype is 1. The states are the `n_hap` panel haplotypes, then the wildcard
-/// where `m` allows one.
-///
-/// With `mutation` 0, a state implies the genotype its two haplotypes spell, and a strand with no
-/// allele averages over the alleles at the escape penalty. With `mutation` positive, each strand
-/// carries an allele drawn from its `StrandEmission`, and the emission sums over them.
-static void build_emission(const LinkageModel::Site& site, size_t n_hap, size_t m, double escape,
+/// Relative P(reads | state) for every ordered pair of panel haplotypes, scaled so that the site's
+/// best genotype is 1. Each strand carries an allele drawn from its `StrandEmission`, and the
+/// emission sums the genotype likelihood over them.
+static void build_emission(const LinkageModel::Site& site, size_t n_hap, double escape,
                            double mutation, vector<double>& e, vector<double>& per_genotype) {
-    size_t n = site.num_alleles;
+    const size_t m = n_hap;
 
     // Genotype likelihoods, shifted so the best is exp(0) = 1.
     double best = -numeric_limits<double>::infinity();
@@ -254,48 +250,12 @@ static void build_emission(const LinkageModel::Site& site, size_t n_hap, size_t 
         }
     }
 
-    if (mutation > 0.0) {
-        const MutationTerms mt = mutation_terms(n, per_genotype, mutation, escape);
-        e.assign(m * m, 0.0);
-        for (size_t a = 0; a < m; ++a) {
-            int ai = allele_at(site, a, n_hap);
-            for (size_t b = 0; b < m; ++b) {
-                e[a * m + b] = mt.emission(ai, allele_at(site, b, n_hap));
-            }
-        }
-        return;
-    }
-
-    // Mean over the other strand's alleles, for a state whose partner is unknown.
-    vector<double> marginal(n, 0.0);
-    double overall = 0.0;
-    for (size_t i = 0; i < n; ++i) {
-        double acc = 0.0;
-        for (size_t j = 0; j < n; ++j) {
-            acc += per_genotype[LinkageModel::genotype_index(i, j)];
-        }
-        marginal[i] = n ? acc / (double)n : 0.0;
-        overall += marginal[i];
-    }
-    overall = n ? overall / (double)n : 0.0;
-
+    const MutationTerms mt = mutation_terms(site.num_alleles, per_genotype, mutation, escape);
     e.assign(m * m, 0.0);
     for (size_t a = 0; a < m; ++a) {
         int ai = allele_at(site, a, n_hap);
         for (size_t b = 0; b < m; ++b) {
-            int bi = allele_at(site, b, n_hap);
-            double value;
-            if (ai >= 0 && bi >= 0) {
-                value = per_genotype[LinkageModel::genotype_index((size_t)ai, (size_t)bi)];
-            } else if (ai >= 0) {
-                // Partner unknown, either the wildcard or a haplotype absent from this site.
-                value = marginal[(size_t)ai] * escape;
-            } else if (bi >= 0) {
-                value = marginal[(size_t)bi] * escape;
-            } else {
-                value = overall * escape * escape;
-            }
-            e[a * m + b] = value;
+            e[a * m + b] = mt.emission(ai, allele_at(site, b, n_hap));
         }
     }
 }
@@ -470,17 +430,15 @@ void viterbi_step(const vector<double>& in, size_t m, double rho_a, double rho_b
 
 }   // anonymous namespace
 
-/// One diploid site's posterior mass under mutation, added to the accumulators of
-/// `window_posteriors`.
+/// One diploid site's posterior mass, added to the accumulators of `window_posteriors`.
 ///
 /// Each state's mass g = alpha * beta is shared among the genotypes its strands could carry, in
 /// proportion to P(i | a) P(j | b) L(i, j). The four terms of that product (see `mutation_terms`)
 /// are kept apart, because the frequency prior treats them differently:
 /// - both strands keep their haplotypes' alleles: the genotype the pair spells, which goes to
-///   `known` and counts towards its multiplicity, as without mutation;
+///   `known` and counts towards its multiplicity;
 /// - one strand keeps allele k and the other takes any allele: spread over (k, j) by likelihood,
-///   and rescaled by the number of k's carriers, as a strand paired with an unknown allele is
-///   without mutation;
+///   and rescaled by the number of k's carriers;
 /// - both take any allele: spread over every genotype by likelihood, unrescaled.
 ///
 /// The uniform part of a strand's distribution includes its own allele, so a little of the mass
@@ -536,7 +494,7 @@ static void mutation_posterior(const LinkageModel::Site& site, const vector<doub
         }
         double share = kept[k];
         if (carriers[k] > 1) {
-            // As for a strand paired with an unknown allele without mutation.
+            // At freq_prior 1 this changes nothing; above 1 it strengthens the prior.
             share /= pow((double)carriers[k], 1.0 - freq_prior);
         }
         for (size_t j = 0; j < n; ++j) {
@@ -555,74 +513,6 @@ static void mutation_posterior(const LinkageModel::Site& site, const vector<doub
     }
 }
 
-/// One diploid site's posterior mass without mutation, added to the accumulators of
-/// `window_posteriors`. A state with both alleles known implies the genotype its pair spells; a
-/// state with an unknown allele, on the wildcard or on a haplotype that does not pass through the
-/// site, shares its mass among the genotypes that allele could complete.
-static void wildcard_posterior(const LinkageModel::Site& site, const vector<double>& per_genotype,
-                               const vector<double>& alpha, const vector<double>& beta,
-                               size_t n_hap, size_t m, const vector<size_t>& carriers,
-                               double freq_prior, vector<double>& known,
-                               vector<size_t>& multiplicity, vector<double>& wild) {
-    const size_t n_alleles = site.num_alleles;
-    for (size_t a = 0; a < m; ++a) {
-        int ai = allele_at(site, a, n_hap);
-        for (size_t b = 0; b < m; ++b) {
-            int bi = allele_at(site, b, n_hap);
-            double g = alpha[a * m + b] * beta[a * m + b];
-            if (g <= 0.0) {
-                continue;
-            }
-            if (ai >= 0 && bi >= 0) {
-                size_t idx = LinkageModel::genotype_index((size_t)ai, (size_t)bi);
-                known[idx] += g;
-                multiplicity[idx] += 1;
-                continue;
-            }
-            if (n_alleles == 0) {
-                continue;
-            }
-            // An unknown allele's mass is shared among the genotypes it could complete, in
-            // proportion to their likelihoods rather than uniformly.
-            if (ai >= 0 || bi >= 0) {
-                size_t k = (size_t)(ai >= 0 ? ai : bi);
-                double norm = 0.0;
-                for (size_t other = 0; other < n_alleles; ++other) {
-                    norm += per_genotype[LinkageModel::genotype_index(k, other)];
-                }
-                if (norm <= 0.0) {
-                    continue;
-                }
-                double share = g;
-                if (k < carriers.size() && carriers[k] > 1) {
-                    // At freq_prior 1 this changes nothing; above 1 it strengthens the prior.
-                    share /= pow((double)carriers[k], 1.0 - freq_prior);
-                }
-                for (size_t other = 0; other < n_alleles; ++other) {
-                    size_t idx = LinkageModel::genotype_index(k, other);
-                    wild[idx] += share * per_genotype[idx] / norm;
-                }
-            } else {
-                double norm = 0.0;
-                for (size_t i = 0; i < n_alleles; ++i) {
-                    for (size_t j = i; j < n_alleles; ++j) {
-                        norm += per_genotype[LinkageModel::genotype_index(i, j)];
-                    }
-                }
-                if (norm <= 0.0) {
-                    continue;
-                }
-                for (size_t i = 0; i < n_alleles; ++i) {
-                    for (size_t j = i; j < n_alleles; ++j) {
-                        size_t idx = LinkageModel::genotype_index(i, j);
-                        wild[idx] += g * per_genotype[idx] / norm;
-                    }
-                }
-            }
-        }
-    }
-}
-
 void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, size_t to,
                                      vector<vector<double>>& out,
                                      const vector<double>* alpha_in,
@@ -636,11 +526,11 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
     for (size_t t = from; t < to; ++t) {
         n_hap = max(n_hap, sites[t].haplotype_allele.size());
     }
-    size_t m = num_states(n_hap);
+    size_t m = n_hap;
 
     vector<vector<double>> emissions(n), per_genotype(n);
     for (size_t t = 0; t < n; ++t) {
-        build_emission(sites[from + t], n_hap, m, params.escape, params.mutation, emissions[t],
+        build_emission(sites[from + t], n_hap, params.escape, params.mutation, emissions[t],
                        per_genotype[t]);
     }
 
@@ -717,9 +607,9 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
         vector<double> wild(site.genotype_ln_likelihood.size(), 0.0);
         size_t n_alleles = site.num_alleles;
 
-        // A state pairing a panel haplotype with the wildcard occurs once for each haplotype that
-        // carries the allele, so the number of carriers acts as a frequency prior on the
-        // half-wildcard mass, and is rescaled like the multiplicity.
+        // Mass where one strand keeps its haplotype's allele k and the other takes any allele
+        // arises once for each haplotype that carries k, so the number of k's carriers acts as a
+        // frequency prior on it, and is rescaled like the multiplicity.
         vector<size_t> carriers(n_alleles, 0);
         for (size_t h = 0; h < n_hap && h < site.haplotype_allele.size(); ++h) {
             int allele = site.haplotype_allele[h];
@@ -728,13 +618,8 @@ void LinkageModel::window_posteriors(const vector<Site>& sites, size_t from, siz
             }
         }
 
-        if (params.mutation > 0.0) {
-            mutation_posterior(site, per_genotype[t], alpha[t], beta, n_hap, m, params.mutation,
-                               params.escape, carriers, freq_prior, known, multiplicity, wild);
-        } else {
-            wildcard_posterior(site, per_genotype[t], alpha[t], beta, n_hap, m, carriers,
-                               freq_prior, known, multiplicity, wild);
-        }
+        mutation_posterior(site, per_genotype[t], alpha[t], beta, n_hap, m, params.mutation,
+                           params.escape, carriers, freq_prior, known, multiplicity, wild);
 
         // Rescale the known-known mass by multiplicity^(freq_prior - 1), the allele-frequency
         // prior.
@@ -878,9 +763,9 @@ vector<LinkageModel::Phase> LinkageModel::phasing(const vector<Site>& sites,
     }
     size_t n = sites.size();
     if (ploidy == 1) {
-        // One strand, so the path is over single haplotypes and `second` stays the wildcard. It
-        // is decoded into its own vector because the pin here is one haplotype rather than a pair.
-        vector<size_t> single(n, WILDCARD);
+        // One strand, so the path is over single haplotypes and `second` names none. It is
+        // decoded into its own vector because the pin here is one haplotype rather than a pair.
+        vector<size_t> single(n, NO_HAPLOTYPE);
         windowed_path(n, max<size_t>(params.window, 1), params.margin, single,
                       [&](size_t lo, size_t hi, size_t pin_index, const size_t& pin,
                           vector<size_t>& local) {
@@ -924,87 +809,42 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
     for (size_t t = from; t < to; ++t) {
         n_hap = max(n_hap, sites[t].haplotype_allele.size());
     }
-    size_t m = num_states(n_hap);
+    size_t m = n_hap;
 
-    // Emissions, with the constraint folded in as zeroes. Zeroing rather than masking keeps the
-    // step's own "impossible stays impossible" test doing double duty, and means a constrained
-    // run and an unconstrained one differ only in this vector.
+    // Emissions, with the constraint folded in. Every state can carry the wanted genotype, by
+    // keeping or mutating each strand's allele, so each takes the probability that its strands
+    // carry it, in either order, times the genotype's likelihood. A pin below zeroes states, and
+    // the step's own "impossible stays impossible" test then does double duty.
     vector<vector<double>> emissions(n), per_genotype(n);
     for (size_t t = 0; t < n; ++t) {
         const Site& site = sites[from + t];
-        build_emission(site, n_hap, m, params.escape, params.mutation, emissions[t],
-                       per_genotype[t]);
+        build_emission(site, n_hap, params.escape, params.mutation, emissions[t], per_genotype[t]);
         size_t want = (from + t) < constraint.size() ? constraint[from + t] : NO_CONSTRAINT;
         if (want == NO_CONSTRAINT) {
             continue;
         }
-        // Decode the wanted genotype, because a state with one free strand has to be checked
-        // against the individual alleles rather than against the pair.
+        // Decode the wanted genotype, since each strand's probability is of one allele.
         size_t wj = 0;
         while (genotype_index(0, wj + 1) <= want) {
             ++wj;
         }
         size_t wi = want - (wj * (wj + 1) / 2);
 
-        if (params.mutation > 0.0) {
-            // Every state can carry the wanted genotype, by keeping or mutating each strand's
-            // allele, so each takes the probability that its strands carry it, in either order,
-            // times the genotype's likelihood.
-            const size_t n_alleles = site.num_alleles;
-            vector<StrandEmission> strand(n_alleles + 1);
-            for (size_t c = 0; c <= n_alleles; ++c) {
-                strand[c] = strand_emission((int)c - 1, n_alleles, params.mutation, params.escape);
-            }
-            const double l = want < per_genotype[t].size() ? per_genotype[t][want] : 0.0;
-            for (size_t a = 0; a < m; ++a) {
-                const StrandEmission& sa = strand[(size_t)(allele_at(site, a, n_hap) + 1)];
-                for (size_t b = 0; b < m; ++b) {
-                    const StrandEmission& sb = strand[(size_t)(allele_at(site, b, n_hap) + 1)];
-                    double p = sa.p(wi) * sb.p(wj);
-                    if (wi != wj) {
-                        p += sa.p(wj) * sb.p(wi);
-                    }
-                    emissions[t][a * m + b] = p * l;
-                }
-            }
-            continue;
+        const size_t n_alleles = site.num_alleles;
+        vector<StrandEmission> strand(n_alleles + 1);
+        for (size_t c = 0; c <= n_alleles; ++c) {
+            strand[c] = strand_emission((int)c - 1, n_alleles, params.mutation, params.escape);
         }
-
+        const double l = want < per_genotype[t].size() ? per_genotype[t][want] : 0.0;
         for (size_t a = 0; a < m; ++a) {
-            int ai = a < site.haplotype_allele.size() ? site.haplotype_allele[a] : -1;
+            const StrandEmission& sa = strand[(size_t)(allele_at(site, a, n_hap) + 1)];
             for (size_t b = 0; b < m; ++b) {
-                int bi = b < site.haplotype_allele.size() ? site.haplotype_allele[b] : -1;
-                // The wildcard, and a haplotype absent from this site, may carry any allele, which
-                // keeps the constrained problem feasible where the panel cannot spell the call.
-                // Only the free strand is unconstrained: a known haplotype carrying neither wanted
-                // allele cannot be rescued by pairing it with the wildcard.
-                bool ok;
-                if (ai >= 0 && bi >= 0) {
-                    ok = genotype_index((size_t)ai, (size_t)bi) == want;
-                } else if (ai >= 0) {
-                    ok = ((size_t)ai == wi || (size_t)ai == wj);
-                } else if (bi >= 0) {
-                    ok = ((size_t)bi == wi || (size_t)bi == wj);
-                } else {
-                    ok = true;
+                const StrandEmission& sb = strand[(size_t)(allele_at(site, b, n_hap) + 1)];
+                double p = sa.p(wi) * sb.p(wj);
+                if (wi != wj) {
+                    p += sa.p(wj) * sb.p(wi);
                 }
-                if (!ok) {
-                    emissions[t][a * m + b] = 0.0;
-                    continue;
-                }
-                // Every surviving state implies the same genotype, so all of them take that
-                // genotype's likelihood. build_emission gave the free strands an average over
-                // alleles, which here would let the path prefer the wildcard wherever the reads
-                // disagree with the call. The escape factor stays, one per free strand, so a
-                // genotype the panel can spell is still preferred.
-                double e = want < per_genotype[t].size() ? per_genotype[t][want] : 0.0;
-                if (ai < 0) {
-                    e *= params.escape;
-                }
-                if (bi < 0) {
-                    e *= params.escape;
-                }
-                emissions[t][a * m + b] = e;
+                emissions[t][a * m + b] = p * l;
             }
         }
     }
@@ -1018,12 +858,11 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
         if (!site.pinned) {
             continue;
         }
-        size_t pa = site.pin_first == WILDCARD ? n_hap : min(site.pin_first, n_hap);
-        size_t pb = site.pin_second == WILDCARD ? n_hap : min(site.pin_second, n_hap);
-        // With mutation there is no wildcard state, so a pin to the wildcard names no state.
+        const size_t pa = site.pin_first, pb = site.pin_second;
         if (pa >= m || pb >= m || emissions[t][pa * m + pb] <= 0.0) {
-            // The pinned pair cannot spell this site's constrained genotype, so pinning it would
-            // leave the site with no reachable state. Leave it only constrained, and count it: in
+            // The pin names no haplotype on a strand, or the pinned pair cannot carry this site's
+            // constrained genotype, so pinning it would leave the site with no state to be in.
+            // Leave it only constrained, and count it: in
             // a group whose only pinned site is its parent, a declined pin leaves the group free
             // to swap its strands relative to the parent.
             ++counters.pin_declined;
@@ -1044,8 +883,7 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
     // site only constrained. With margin 0 the pin index falls outside [from, to) and is skipped.
     if (pin_index != (size_t)-1 && pin_index >= from && pin_index < to) {
         size_t t = pin_index - from;
-        size_t pa = pin.first == WILDCARD ? n_hap : min(pin.first, n_hap);
-        size_t pb = pin.second == WILDCARD ? n_hap : min(pin.second, n_hap);
+        const size_t pa = pin.first, pb = pin.second;
         double keep = (pa < m && pb < m) ? emissions[t][pa * m + pb] : 0.0;
         if (keep > 0.0) {
             emissions[t].assign(m * m, 0.0);
@@ -1072,9 +910,9 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
             if (v > NEG_INF) { any = true; break; }
         }
         if (!any) {
-            // No state survives: the constraint and the panel disagree beyond what the wildcard
-            // can absorb. Restart the chain here rather than abandoning the window, so the rest
-            // of it is still phased; the discontinuity is visible as a switch on both strands.
+            // No state survives, which happens only where the chosen genotype has no likelihood.
+            // Restart the chain here rather than abandoning the window, so the rest of it is
+            // still phased; the discontinuity is visible as a switch on both strands.
             for (size_t k = 0; k < m * m; ++k) {
                 next[k] = emissions[t][k] > 0.0 ? log(emissions[t][k]) : NEG_INF;
                 back_a[t][k] = (uint16_t)(k / m);
@@ -1097,8 +935,8 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
     }
     size_t a = best / m, b = best % m;
     for (size_t t = n; t-- > 0;) {
-        out[t].first = (a == n_hap) ? WILDCARD : a;
-        out[t].second = (b == n_hap) ? WILDCARD : b;
+        out[t].first = a;
+        out[t].second = b;
         if (t > 0) {
             size_t pa = back_a[t][a * m + b];
             size_t pb = back_b[t][a * m + b];
@@ -1116,7 +954,7 @@ void LinkageModel::window_phasing(const vector<Site>& sites, size_t from, size_t
 
 void LinkageModel::haploid_emission(const Site& site, size_t n_hap, vector<double>& e,
                                     vector<double>& per_allele) const {
-    size_t m = num_states(n_hap);
+    size_t m = n_hap;
     size_t n = site.num_alleles;
 
     // Shift so the best allele is exp(0) = 1, as build_emission does for genotypes: it keeps the
@@ -1133,29 +971,18 @@ void LinkageModel::haploid_emission(const Site& site, size_t n_hap, vector<doubl
         per_allele[a] = std::isfinite(v) && std::isfinite(best) ? exp(v - best) : 0.0;
     }
 
-    double overall = 0.0;
+    double sum = 0.0;
     for (double v : per_allele) {
-        overall += v;
+        sum += v;
     }
-    overall = n ? overall / (double)n : 0.0;
 
+    // Summed over the allele the strand carries, as the diploid emission does: base * (sum of the
+    // likelihoods) + keep * the likelihood of the haplotype's own allele.
     e.assign(m, 0.0);
-    if (params.mutation > 0.0) {
-        // Summed over the allele the strand carries, as the diploid emission does: base * (sum
-        // of the likelihoods) + keep * the likelihood of the haplotype's own allele.
-        const double sum = overall * (double)n;
-        for (size_t a = 0; a < m; ++a) {
-            const int ai = allele_at(site, a, n_hap);
-            const StrandEmission s = strand_emission(ai, n, params.mutation, params.escape);
-            e[a] = s.base * sum + (ai >= 0 ? s.keep * per_allele[(size_t)ai] : 0.0);
-        }
-        return;
-    }
     for (size_t a = 0; a < m; ++a) {
-        int ai = allele_at(site, a, n_hap);
-        // The wildcard, and a haplotype absent from this site, carry an unknown allele: average
-        // over the alleles and pay the escape penalty, exactly as the diploid emission does.
-        e[a] = (ai >= 0) ? per_allele[(size_t)ai] : overall * params.escape;
+        const int ai = allele_at(site, a, n_hap);
+        const StrandEmission s = strand_emission(ai, n, params.mutation, params.escape);
+        e[a] = s.base * sum + (ai >= 0 ? s.keep * per_allele[(size_t)ai] : 0.0);
     }
 }
 
@@ -1173,7 +1000,7 @@ void LinkageModel::window_haploid_posteriors(const vector<Site>& sites, size_t f
         n_hap = max(n_hap, sites[t].haplotype_allele.size());
         n_alleles_max = max(n_alleles_max, sites[t].num_alleles);
     }
-    size_t m = num_states(n_hap);
+    size_t m = n_hap;
 
     vector<vector<double>> emissions(n), per_allele(n);
     for (size_t t = 0; t < n; ++t) {
@@ -1258,38 +1085,19 @@ void LinkageModel::window_haploid_posteriors(const vector<Site>& sites, size_t f
                 continue;
             }
             int ai = allele_at(site, a, n_hap);
-            if (params.mutation > 0.0) {
-                // As in the diploid pass: the share of the state's mass where the strand keeps its
-                // haplotype's allele is known, and the uniform share is spread by likelihood.
-                const StrandEmission st =
-                    strand_emission(ai, site.num_alleles, params.mutation, params.escape);
-                if (!(emissions[t][a] > 0.0)) {
-                    continue;
-                }
-                const double w = g / emissions[t][a];
-                if (ai >= 0) {
-                    known[(size_t)ai] += w * st.keep * per_allele[t][(size_t)ai];
-                }
-                for (size_t k = 0; k < site.num_alleles; ++k) {
-                    wild[k] += w * st.base * per_allele[t][k];
-                }
+            // As in the diploid pass: the share of the state's mass where the strand keeps its
+            // haplotype's allele is known, and the uniform share is spread by likelihood.
+            if (!(emissions[t][a] > 0.0)) {
                 continue;
             }
+            const StrandEmission st =
+                strand_emission(ai, site.num_alleles, params.mutation, params.escape);
+            const double w = g / emissions[t][a];
             if (ai >= 0) {
-                known[(size_t)ai] += g;
-                continue;
-            }
-            // An unknown allele's mass is shared in proportion to the likelihoods, as in the
-            // diploid pass.
-            double norm = 0.0;
-            for (double v : per_allele[t]) {
-                norm += v;
-            }
-            if (norm <= 0.0) {
-                continue;
+                known[(size_t)ai] += w * st.keep * per_allele[t][(size_t)ai];
             }
             for (size_t k = 0; k < site.num_alleles; ++k) {
-                wild[k] += g * per_allele[t][k] / norm;
+                wild[k] += w * st.base * per_allele[t][k];
             }
         }
         double total = 0.0;
@@ -1346,7 +1154,7 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
                                           vector<size_t>& out,
                                           const vector<double>* alpha_in) const {
     size_t n = to - from;
-    out.assign(n, WILDCARD);
+    out.assign(n, NO_HAPLOTYPE);
     if (n == 0) {
         return;
     }
@@ -1354,7 +1162,7 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
     for (size_t t = from; t < to; ++t) {
         n_hap = max(n_hap, sites[t].haplotype_allele.size());
     }
-    size_t m = num_states(n_hap);
+    size_t m = n_hap;
 
     vector<vector<double>> emissions(n), per_allele(n);
     for (size_t t = 0; t < n; ++t) {
@@ -1364,31 +1172,20 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
         if (want == NO_CONSTRAINT) {
             continue;
         }
-        // Constrain to states carrying the called allele. As in the diploid case, every surviving
-        // state then implies the same call, so they all take that allele's likelihood; a free
-        // strand keeps the escape penalty so the panel is still preferred where it can explain.
+        // As in the diploid case: any state can carry the called allele, by keeping or mutating
+        // its own, so each takes the probability that it does times the allele's likelihood.
         double e = want < per_allele[t].size() ? per_allele[t][want] : 0.0;
         for (size_t a = 0; a < m; ++a) {
-            int ai = allele_at(site, a, n_hap);
-            if (params.mutation > 0.0) {
-                // Any state can carry the called allele, by keeping or mutating its own.
-                emissions[t][a] =
-                    strand_emission(ai, site.num_alleles, params.mutation, params.escape).p(want)
-                    * e;
-            } else if (ai >= 0 && (size_t)ai != want) {
-                emissions[t][a] = 0.0;
-            } else if (ai >= 0) {
-                emissions[t][a] = e;
-            } else {
-                emissions[t][a] = e * params.escape;
-            }
+            const int ai = allele_at(site, a, n_hap);
+            emissions[t][a] =
+                strand_emission(ai, site.num_alleles, params.mutation, params.escape).p(want) * e;
         }
     }
-    // As in the diploid caller: test before zeroing, and skip the pin outright when the pinned
-    // state conflicts with this window's constraints, rather than pinning the forbidden state.
+    // As in the diploid caller: test before zeroing, and skip the pin outright when it names no
+    // haplotype or the pinned state cannot carry this window's constraint.
     if (pin_index != (size_t)-1 && pin_index >= from && pin_index < to) {
         size_t t = pin_index - from;
-        size_t pa = pin == WILDCARD ? n_hap : min(pin, n_hap);
+        const size_t pa = pin;
         double keep = pa < m ? emissions[t][pa] : 0.0;
         if (keep > 0.0) {
             emissions[t].assign(m, 0.0);
@@ -1411,10 +1208,10 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
             delta[k] = log(prior) + log(emissions[0][k]);
         }
     }
-    // Every state the message allows is also forbidden by the emission, so the message and the
-    // reads disagree outright. Fall back to the reads: a decode with no live state returns
-    // WILDCARD everywhere, which reports "the panel cannot explain this strand" for a strand the
-    // panel explains perfectly well once the parent's claim is dropped.
+    // Every state the message allows has a zero emission, so the message and the reads disagree
+    // outright. Fall back to the reads: a decode with no live state names no haplotype anywhere,
+    // which reports "the panel cannot explain this strand" for a strand the panel explains
+    // perfectly well once the parent's claim is dropped.
     if (have_alpha) {
         bool any = false;
         for (size_t k = 0; k < m && !any; ++k) {
@@ -1468,8 +1265,8 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
             if (v > NINF) { any = true; break; }
         }
         if (!any) {
-            // Constraint and panel disagree beyond what the wildcard absorbs: restart here rather
-            // than abandoning the window, as the diploid pass does.
+            // No state survives, as in the diploid pass: restart here rather than abandoning the
+            // window.
             for (size_t k = 0; k < m; ++k) {
                 next[k] = emissions[t][k] > 0.0 ? log(emissions[t][k]) : NINF;
                 back[t][k] = (uint16_t)k;
@@ -1491,7 +1288,7 @@ void LinkageModel::window_haploid_phasing(const vector<Site>& sites, size_t from
     }
     size_t cur = best;
     for (size_t t = n; t-- > 0;) {
-        out[t] = (cur == n_hap) ? WILDCARD : cur;
+        out[t] = cur;
         if (t > 0) {
             cur = back[t][cur];
         }
@@ -1950,8 +1747,8 @@ void LinkageCollector::finish_phase_call(PhaseCall& pc, const Entry& e) const {
     bool fell_back = false;
     render_phase_pair(allele_arena, e.allele_offset, e.num_alleles, c_first, c_second,
                       e.called_i, e.called_j, &v_first, &v_second, &fell_back);
-    pc.allele_first = v_first >= 0 ? (size_t)v_first : LinkageModel::WILDCARD;
-    pc.allele_second = v_second >= 0 ? (size_t)v_second : LinkageModel::WILDCARD;
+    pc.allele_first = v_first >= 0 ? (size_t)v_first : numeric_limits<size_t>::max();
+    pc.allele_second = v_second >= 0 ? (size_t)v_second : numeric_limits<size_t>::max();
     if (fell_back) {
         pc.order_arbitrary = pc.order_arbitrary || (v_first != v_second);
     }
@@ -2233,14 +2030,9 @@ size_t LinkageCollector::resolve_level(
                 grouped_sites += group.size();
                 ++grouped_groups;
                 groups.push_back(std::move(group));
-                // The entering message, from the parent's chosen state, owned by
-                // `deltas`. The parent's WILDCARD, `(size_t)-1` outside the model, is state
-                // `n_haplotypes` inside it, so it is translated before indexing. With mutation
-                // there is no such state, and a parent on it gives no message.
-                const size_t m = model.num_states(n_haplotypes);
-                auto state_of = [&](size_t h) {
-                    return h == LinkageModel::WILDCARD ? n_haplotypes : h;
-                };
+                // The entering message, from the parent's chosen state, owned by `deltas`. A
+                // parent strand that names no haplotype gives no message.
+                const size_t m = n_haplotypes;
                 auto pin = pinned_phase.find(std::get<0>(kv.first));
                 if (pin == pinned_phase.end()) {
                     gctx.push_back(nullptr);
@@ -2250,7 +2042,7 @@ size_t LinkageCollector::resolve_level(
                     // traversal, which is part of the group key, so the first member stands for
                     // all. A haploid parent records its haplotype in the slot its own
                     // `nested_strand` names, `hap_second` on strand 1 and `hap_first` otherwise,
-                    // and the other slot holds the wildcard.
+                    // and the other slot names none.
                     const Entry& child = entries[kv.second.front()];
                     const int carrying = relate(child, entries[pidx]).carrying_trav;
                     const int strand = nested_strand_of(carrying, pin->second.ploidy,
@@ -2262,10 +2054,8 @@ size_t LinkageCollector::resolve_level(
                     // Give no message where the parent's haplotype does not pass through the child,
                     // since it names no allele there. A haploid parent has one haplotype, so the
                     // child needs no strand of its own to find it.
-                    const size_t st = state_of(hap);
                     const bool have_hap = pin->second.ploidy == 1 || strand >= 0;
-                    bool traversed = have_hap && hap != LinkageModel::WILDCARD
-                                     && st < n_haplotypes
+                    bool traversed = have_hap && hap < n_haplotypes
                                      && (int)hap_arena[child.hap_offset + hap] >= 0;
                     if (traversed) {
                         // A point mass at the parent's haplotype where the group starts at the
@@ -2279,7 +2069,7 @@ size_t LinkageCollector::resolve_level(
                                       entries[pidx].position, entries[pidx].unpositioned, true,
                                       child.position, child.unpositioned));
                         deltas.emplace_back(m, rho / (double)m);
-                        deltas.back()[st] += 1.0 - rho;
+                        deltas.back()[hap] += 1.0 - rho;
                         gctx.push_back(&deltas.back());
                     } else {
                         gctx.push_back(nullptr);
@@ -2297,12 +2087,11 @@ size_t LinkageCollector::resolve_level(
                     } else {
                         model.counters.nest_unreadable += kv.second.size();
                     }
-                } else if (state_of(pin->second.first) >= m || state_of(pin->second.second) >= m) {
+                } else if (pin->second.first >= m || pin->second.second >= m) {
                     gctx.push_back(nullptr);
                 } else {
                     deltas.emplace_back(m * m, 0.0);
-                    deltas.back()[state_of(pin->second.first) * m
-                                  + state_of(pin->second.second)] = 1.0;
+                    deltas.back()[pin->second.first * m + pin->second.second] = 1.0;
                     gctx.push_back(&deltas.back());
                 }
                 gps.push_back(pin != pinned_phase.end() ? pin->second.phase_set
@@ -2498,17 +2287,16 @@ size_t LinkageCollector::resolve_level(
             d.phase_set = chain_phase_set[chain_i];
         }
         // The alleles the path's haplotypes carry, read here so that `sites` need not be kept
-        // until the results are applied. Where a strand is on the wildcard the panel does not name
-        // its allele.
+        // until the results are applied; -1 where a haplotype does not pass through the site.
         d.allele_first.assign(d.phase.size(), -1);
         d.allele_second.assign(d.phase.size(), -1);
         for (size_t t = 0; t < indices.size() && t < d.phase.size(); ++t) {
             const LinkageModel::Phase& ph = d.phase[t];
-            if (ph.first != LinkageModel::WILDCARD
+            if (ph.first != LinkageModel::NO_HAPLOTYPE
                 && ph.first < sites[t].haplotype_allele.size()) {
                 d.allele_first[t] = sites[t].haplotype_allele[ph.first];
             }
-            if (ph.second != LinkageModel::WILDCARD
+            if (ph.second != LinkageModel::NO_HAPLOTYPE
                 && ph.second < sites[t].haplotype_allele.size()) {
                 d.allele_second[t] = sites[t].haplotype_allele[ph.second];
             }
@@ -2585,9 +2373,9 @@ size_t LinkageCollector::resolve_level(
                 continue;   // its PhaseCall was emitted, and pinned above, at its own level
             }
             const LinkageModel::Phase& ph = d.phase[t];
-            // Read the ordered allele pair off the haplotypes the path chose. Where a strand is
-            // on the wildcard the panel does not name its allele, so fall back to the genotype's
-            // own order -- the phase is then unsupported at that strand rather than wrong.
+            // Read the ordered allele pair off the haplotypes the path chose. Where neither
+            // haplotype's allele orders the pair, fall back to the genotype's own order -- the
+            // phase is then unsupported rather than wrong.
             size_t want = d.final_genotype[t];
             size_t i = want, j = want;
             if (e.ploidy != 1) {
@@ -2626,10 +2414,10 @@ size_t LinkageCollector::resolve_level(
             // Fill the slot that `nested_strand` names, since the mosaic reads that slot and treats
             // the other as empty.
             if (!nameable) {
-                pc.hap_first = LinkageModel::WILDCARD;
-                pc.hap_second = LinkageModel::WILDCARD;
+                pc.hap_first = LinkageModel::NO_HAPLOTYPE;
+                pc.hap_second = LinkageModel::NO_HAPLOTYPE;
             } else if (nested_slot == 1) {
-                pc.hap_first = LinkageModel::WILDCARD;
+                pc.hap_first = LinkageModel::NO_HAPLOTYPE;
                 pc.hap_second = ph.first;
             } else {
                 pc.hap_first = ph.first;
@@ -2648,10 +2436,8 @@ size_t LinkageCollector::resolve_level(
                 pc.allele_first = (size_t)a;
                 pc.allele_second = (size_t)b;
             } else if (a >= 0 && a == b && i != j) {
-                // Both haplotypes carry one of the called alleles, and a mutation gave a strand the
-                // other. Either strand could have mutated, so nothing orders the pair, as below.
-                // Without mutation the path cannot reach this, since each strand carries its
-                // haplotype's allele.
+                // Both haplotypes carry the same allele, and a mutation gave one strand another.
+                // Either strand could have mutated, so nothing orders the pair, as below.
                 pc.allele_first = i;
                 pc.allele_second = j;
                 pc.order_arbitrary = true;

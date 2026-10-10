@@ -112,8 +112,8 @@ size_t PhaseTable::swap_strands(const unordered_set<size_t>& flips, vector<Neste
         bool strand_moved = false;
         if (pc.nested_strand >= 0 && parent_flipped) {
             pc.nested_strand = pc.nested_strand == 0 ? 1 : 0;
-            // The haplotype is held in the slot `nested_strand` names, and the other slot holds the
-            // wildcard, which the mosaic reads as an empty strand.
+            // The haplotype is held in the slot `nested_strand` names, and the other slot names
+            // none, which the mosaic reads as an empty strand.
             std::swap(pc.hap_first, pc.hap_second);
             strand_moved = true;
             ++moved;

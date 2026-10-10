@@ -191,9 +191,9 @@ TEST_CASE("Linkage does not override decisive reads", "[linkage_model]") {
 }
 
 TEST_CASE("An allele no panel haplotype carries stays callable", "[linkage_model]") {
-    // A state implies a genotype, so without the wildcard contributing mass for each allele, a
-    // genotype the panel cannot spell would be unreachable and the model would suppress novel
-    // alleles. The graph need not contain the sample, so this is the common case.
+    // Without mutation a state would imply only the genotype its pair spells, so a genotype the
+    // panel cannot spell would be unreachable and the model would suppress novel alleles. The
+    // graph need not contain the sample, so this is the common case.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 1.0;
@@ -651,8 +651,8 @@ TEST_CASE("A nested site takes its strand from the parent traversal that carries
             // haplotype to name. Claiming one would put a variant in the emitted genome that the
             // parent record does not carry.
             REQUIRE(child->nested_strand == -1);
-            REQUIRE(child->hap_first == LinkageModel::WILDCARD);
-            REQUIRE(child->hap_second == LinkageModel::WILDCARD);
+            REQUIRE(child->hap_first == LinkageModel::NO_HAPLOTYPE);
+            REQUIRE(child->hap_second == LinkageModel::NO_HAPLOTYPE);
             continue;
         }
         // Placed on the strand the carrying traversal was phased onto -- found by asking the
@@ -662,10 +662,10 @@ TEST_CASE("A nested site takes its strand from the parent traversal that carries
         REQUIRE(child->nested_strand == want);
         if (want == 0) {
             REQUIRE(child->hap_first == parent->hap_first);
-            REQUIRE(child->hap_second == LinkageModel::WILDCARD);
+            REQUIRE(child->hap_second == LinkageModel::NO_HAPLOTYPE);
         } else {
             REQUIRE(child->hap_second == parent->hap_second);
-            REQUIRE(child->hap_first == LinkageModel::WILDCARD);
+            REQUIRE(child->hap_first == LinkageModel::NO_HAPLOTYPE);
         }
     }
 }
@@ -762,8 +762,8 @@ TEST_CASE("Phasing recovers a planted mosaic", "[linkage_model]") {
 
     for (size_t t = 0; t < sites.size(); ++t) {
         const vector<int>& h = sites[t].haplotype_allele;
-        int a = ph[t].first == LinkageModel::WILDCARD ? -1 : h[ph[t].first];
-        int b = ph[t].second == LinkageModel::WILDCARD ? -1 : h[ph[t].second];
+        int a = ph[t].first == LinkageModel::NO_HAPLOTYPE ? -1 : h[ph[t].first];
+        int b = ph[t].second == LinkageModel::NO_HAPLOTYPE ? -1 : h[ph[t].second];
         REQUIRE(((a == 0 && b == 1) || (a == 1 && b == 0) || a < 0 || b < 0));
     }
     // One switch per strand, not one per site: the mosaic is piecewise, which is the whole basis
@@ -785,7 +785,7 @@ TEST_CASE("Constrained phasing spells the required genotype everywhere", "[linka
     //
     // The constraints have to be jointly explicable by some pair, which is not a weakness of the
     // test but the model working: constraints that flip genotype faster than any panel pair can
-    // follow are better explained by the wildcard than by paying a switch per site, and the model
+    // follow are better explained by mutations than by paying a switch per site, and the model
     // will correctly say so. Real calls come from the panel, so they do not look like that.
     size_t n = 6;
     vector<LinkageModel::Site> sites;
@@ -799,8 +799,8 @@ TEST_CASE("Constrained phasing spells the required genotype everywhere", "[linka
     REQUIRE(ph.size() == n);
     for (size_t t = 0; t < n; ++t) {
         const vector<int>& h = sites[t].haplotype_allele;
-        REQUIRE(ph[t].first != LinkageModel::WILDCARD);
-        REQUIRE(ph[t].second != LinkageModel::WILDCARD);
+        REQUIRE(ph[t].first != LinkageModel::NO_HAPLOTYPE);
+        REQUIRE(ph[t].second != LinkageModel::NO_HAPLOTYPE);
         size_t got = LinkageModel::genotype_index((size_t)h[ph[t].first],
                                                   (size_t)h[ph[t].second]);
         REQUIRE(got == want[t]);
@@ -809,16 +809,14 @@ TEST_CASE("Constrained phasing spells the required genotype everywhere", "[linka
     REQUIRE(count_switches(ph) == 0);
 }
 
-TEST_CASE("A constraint no panel pair can follow routes through the wildcard",
-          "[linkage_model]") {
+TEST_CASE("A constraint no panel pair can follow is explained by mutations", "[linkage_model]") {
     // The other side of the same behaviour. Here the constraint flips 1/1, 0/0, 0/1 at 100 bp
     // spacing. A panel explanation would have to switch both strands twice, at about 10.6 nats a
-    // switch, against 4.6 nats per free strand for the wildcard, so the wildcard is the better
-    // answer and the model returns it. The wildcard is a state only with mutation off.
+    // switch, against about 5.8 nats per mutation, so mutations are the better answer and the
+    // model returns them: some strand carries an allele its haplotype does not.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 2.0;
-    p.mutation = 0.0;
     LinkageModel model(p);
     vector<LinkageModel::Site> sites{
         biallelic(1000, 0.0, -20.0, -20.0, {0, 1, 0, 1}),
@@ -832,22 +830,24 @@ TEST_CASE("A constraint no panel pair can follow routes through the wildcard",
     };
     auto ph = model.phasing(sites, want);
     REQUIRE(ph.size() == 3);
-    bool any_wildcard = false;
-    for (const auto& e : ph) {
-        any_wildcard |= (e.first == LinkageModel::WILDCARD
-                         || e.second == LinkageModel::WILDCARD);
+    bool any_mutation = false;
+    for (size_t t = 0; t < ph.size(); ++t) {
+        REQUIRE(ph[t].first != LinkageModel::NO_HAPLOTYPE);
+        REQUIRE(ph[t].second != LinkageModel::NO_HAPLOTYPE);
+        const vector<int>& h = sites[t].haplotype_allele;
+        any_mutation |= LinkageModel::genotype_index((size_t)h[ph[t].first],
+                                                     (size_t)h[ph[t].second]) != want[t];
     }
-    REQUIRE(any_wildcard);
+    REQUIRE(any_mutation);
 }
 
 TEST_CASE("Phasing stays feasible where the panel cannot spell the call", "[linkage_model]") {
     // Panel enumeration makes this unreachable, but --enumerate-support does not, and returning
-    // nothing there would drop a whole chain over one site. With mutation off, the wildcard is what
-    // keeps the constrained problem solvable.
+    // nothing there would drop a whole chain over one site. Mutation is what keeps the constrained
+    // problem solvable, and each strand still names the haplotype it copies.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 2.0;
-    p.mutation = 0.0;
     LinkageModel model(p);
 
     vector<LinkageModel::Site> sites{
@@ -858,8 +858,8 @@ TEST_CASE("Phasing stays feasible where the panel cannot spell the call", "[link
                         LinkageModel::genotype_index(1, 1)};
     auto ph = model.phasing(sites, want);
     REQUIRE(ph.size() == 2);
-    REQUIRE(ph[0].first == LinkageModel::WILDCARD);
-    REQUIRE(ph[0].second == LinkageModel::WILDCARD);
+    REQUIRE(ph[0].first != LinkageModel::NO_HAPLOTYPE);
+    REQUIRE(ph[0].second != LinkageModel::NO_HAPLOTYPE);
 }
 
 TEST_CASE("Window seams do not manufacture switches", "[linkage_model]") {
@@ -925,9 +925,9 @@ TEST_CASE("A haploid chain gets a mosaic", "[linkage_model]") {
 
     // Every site must be explained by a haplotype carrying the allele the reads chose.
     for (size_t t = 0; t < sites.size(); ++t) {
-        // One strand, so `second` is the wildcard everywhere and only `first` says anything.
-        REQUIRE(path[t].second == LinkageModel::WILDCARD);
-        if (path[t].first == LinkageModel::WILDCARD) {
+        // One strand, so `second` names none everywhere and only `first` says anything.
+        REQUIRE(path[t].second == LinkageModel::NO_HAPLOTYPE);
+        if (path[t].first == LinkageModel::NO_HAPLOTYPE) {
             continue;
         }
         REQUIRE(sites[t].haplotype_allele[path[t].first] == 1);
@@ -1007,7 +1007,7 @@ TEST_CASE("Constrained haploid phasing spells the called allele", "[linkage_mode
     auto path = model.phasing(sites, want, /*ploidy*/ 1);
     REQUIRE(path.size() == 6);
     for (size_t t = 0; t < 6; ++t) {
-        REQUIRE(path[t].first != LinkageModel::WILDCARD);
+        REQUIRE(path[t].first != LinkageModel::NO_HAPLOTYPE);
         REQUIRE(sites[t].haplotype_allele[path[t].first] == 1);
     }
 }
@@ -1108,9 +1108,9 @@ TEST_CASE("A site below depth 1 inherits its parent's strand, not strand 0",
         // The property: the grandchild is on the same haplotype as the site that contains it. Before
         // this it was always strand 0, so it agreed only when the middle site happened to be there.
         REQUIRE(deep->nested_strand == mid->nested_strand);
-        // And it names a haplotype rather than inheriting the parent's wildcard slot.
+        // And it names a haplotype rather than inheriting the parent's empty slot.
         const size_t named = deep->nested_strand == 0 ? deep->hap_first : deep->hap_second;
-        REQUIRE(named != LinkageModel::WILDCARD);
+        REQUIRE(named != LinkageModel::NO_HAPLOTYPE);
         // The same haplotype as the site that contains it, which both panel haplotypes would
         // explain equally well without the parent's message, on either of the parent's strands.
         const size_t mid_named = mid->nested_strand == 0 ? mid->hap_first : mid->hap_second;
@@ -1324,17 +1324,13 @@ TEST_CASE("A nested site names the haplotype its strand copies, in its strand's 
     // The child's own haplotype is decoded with the parent's as an entering message. The message is
     // a prior, not a constraint: decisive reads overrule it, and weak ones follow it.
     //
-    // With mutation on, a strand whose reads want an allele its haplotype does not carry keeps the
-    // haplotype and carries the allele as a mutation, so the record names that haplotype. With it
-    // off, only the wildcard can carry such an allele, and the record names no haplotype: a named
-    // haplotype then always carries the record's allele.
-    for (double mutation : {0.0, LinkageModel::Params().mutation}) {
+    // A strand whose reads want an allele its haplotype does not carry keeps the haplotype and
+    // carries the allele as a mutation, so the record names that haplotype.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 1.0;
     p.scale = 100000.0;
     p.rho_min = 1e-4;
-    p.mutation = mutation;
 
     const size_t PARENT = 4, CHILD = 41;
 
@@ -1374,20 +1370,19 @@ TEST_CASE("A nested site names the haplotype its strand copies, in its strand's 
         // reported every second-strand chain as carried on the strand it is not on.
         const size_t named = child->nested_strand == 0 ? child->hap_first : child->hap_second;
         const size_t other = child->nested_strand == 0 ? child->hap_second : child->hap_first;
-        REQUIRE(other == LinkageModel::WILDCARD);
+        REQUIRE(other == LinkageModel::NO_HAPLOTYPE);
         REQUIRE(child->allele_first == child->allele_second);    // ploidy 1: one strand, one allele
         if (margin > 10.0) {
             // An e^30 preference outweighs the chance of leaving the parent's haplotype, or of a
             // mutation on it, so the record says allele 1, which no panel haplotype spells here.
             REQUIRE(child->allele_first == 1);
-            REQUIRE(named == (mutation > 0.0 ? 1 : LinkageModel::WILDCARD));
+            REQUIRE(named == 1);
         } else {
             // An e^1 preference does not, so the child stays on the parent's haplotype and says
             // the allele it spells.
             REQUIRE(child->allele_first == 0);
             REQUIRE(named == 1);
         }
-    }
     }
 }
 
@@ -1562,8 +1557,8 @@ TEST_CASE("A nested haploid chain its parent carries TWICE names no haplotype",
     REQUIRE(child->nested_strand == -1);
     // And no haplotype on either side. A named haplotype here would put the chain on one of the
     // parent's two strands, which is the one thing known to be false about it.
-    REQUIRE(child->hap_first == LinkageModel::WILDCARD);
-    REQUIRE(child->hap_second == LinkageModel::WILDCARD);
+    REQUIRE(child->hap_first == LinkageModel::NO_HAPLOTYPE);
+    REQUIRE(child->hap_second == LinkageModel::NO_HAPLOTYPE);
 }
 
 TEST_CASE("A revised site stops being unemitted when the revision writes a line",
@@ -1720,7 +1715,6 @@ TEST_CASE("Mutation posteriors match a brute-force sum over paths and alleles", 
     p.escape = 0.02;
     LinkageModel model(p);
     const size_t n = 3, m = 3;
-    REQUIRE(model.num_states(3) == m);
 
     LinkageModel::Site s1, s2;
     s1.position = 1000;
@@ -1834,11 +1828,11 @@ TEST_CASE("Haploid mutation posteriors match a brute-force sum over paths and al
     }
 }
 
-TEST_CASE("With mutation, a strand keeps its haplotype through an allele no haplotype carries",
+TEST_CASE("A strand keeps its haplotype through an allele no haplotype carries",
           "[linkage_model]") {
     // Haplotypes 0 and 1 spell the call at every site but the middle one, where the call is 1/2
-    // and nothing carries allele 2. Without mutation that strand has to visit the wildcard and come
-    // back; with it, haplotype 0 carries allele 2 as a mutation and neither strand switches.
+    // and nothing carries allele 2. Haplotype 0 carries allele 2 there as a mutation, and neither
+    // strand switches.
     LinkageModel::Params p;
     p.freq_prior = 0.0;
     p.weight = 2.0;
@@ -1865,19 +1859,13 @@ TEST_CASE("With mutation, a strand keeps its haplotype through an allele no hapl
     auto ph = model.phasing(sites, want);
     REQUIRE(ph.size() == sites.size());
     for (size_t t = 0; t < ph.size(); ++t) {
-        REQUIRE(ph[t].first != LinkageModel::WILDCARD);
-        REQUIRE(ph[t].second != LinkageModel::WILDCARD);
+        REQUIRE(ph[t].first != LinkageModel::NO_HAPLOTYPE);
+        REQUIRE(ph[t].second != LinkageModel::NO_HAPLOTYPE);
     }
     REQUIRE(count_switches(ph) == 0);
     // The strands are haplotypes 0 and 1, in either order.
     REQUIRE(min(ph[0].first, ph[0].second) == 0);
     REQUIRE(max(ph[0].first, ph[0].second) == 1);
-
-    // Without mutation, the same call goes through the wildcard.
-    LinkageModel::Params off = p;
-    off.mutation = 0.0;
-    auto wild = LinkageModel(off).phasing(sites, want);
-    REQUIRE((wild[2].first == LinkageModel::WILDCARD || wild[2].second == LinkageModel::WILDCARD));
 }
 
 TEST_CASE("A het whose other allele is a mutation on either of two like haplotypes has no order",
@@ -1904,8 +1892,8 @@ TEST_CASE("A het whose other allele is a mutation on either of two like haplotyp
     }
     REQUIRE(mid != nullptr);
     REQUIRE(mid->order_arbitrary);
-    REQUIRE(mid->hap_first != LinkageModel::WILDCARD);
-    REQUIRE(mid->hap_second != LinkageModel::WILDCARD);
+    REQUIRE(mid->hap_first != LinkageModel::NO_HAPLOTYPE);
+    REQUIRE(mid->hap_second != LinkageModel::NO_HAPLOTYPE);
     REQUIRE(c.mutated_strands() == 1);
 }
 
