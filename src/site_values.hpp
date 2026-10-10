@@ -120,6 +120,25 @@ vector<SiteBounds> enclosing_sites(const SnarlDecomposition& decomposition,
 ChildChain chain_of_site(const SnarlDecomposition& decomposition, const HandleGraph& graph,
                          const net_handle_t& site);
 
+/// Where a node lies in a decomposition: the sites that hold it and the chain it is in.
+struct NodePlacement {
+    /// The innermost site that holds the node, or the decomposition's root when no site does.
+    net_handle_t site;
+    /// The bounds of `site` and of the sites enclosing it, innermost first, as the decomposition
+    /// orients them, as `SiteView::enclosing` holds them for a site placed on the node. Empty when
+    /// no site holds the node.
+    vector<SiteBounds> enclosing;
+    /// The chain the node is in, by its oriented bounds: the chain of the sites the node bounds,
+    /// or, for a node that bounds no site, the node's own chain of one node.
+    ChildChain chain;
+};
+
+/// Where node `id` lies in `decomposition`. A node that bounds a site lies in that site's chain,
+/// between the site and its neighbour in the chain, and is held by the chain's parent; any other
+/// node is a chain of its own inside the innermost site that holds it.
+NodePlacement placement_of_node(const SnarlDecomposition& decomposition, const HandleGraph& graph,
+                                nid_t id);
+
 /// The key that tells `chain` from the other chains under the same parent, from the node IDs of
 /// its bounds as `oriented_bounds` gives them. The linkage model groups a parent's child sites by
 /// it. A node that bounds no site is a chain of one node, whose bounds are that node at

@@ -190,6 +190,119 @@ static void check_walks(const DecompositionPair& pair, size_t window) {
     }
 }
 
+/// Describe where each node of the graph lies: the chain it is in and the sites that hold it,
+/// innermost first, each named whichever way round it is read.
+static map<nid_t, string> node_placements(const SnarlDecomposition& decomposition,
+                                          const HandleGraph& graph) {
+    map<nid_t, string> out;
+    graph.for_each_handle([&](const handle_t& handle) {
+        const nid_t id = graph.get_id(handle);
+        const NodePlacement place = placement_of_node(decomposition, graph, id);
+        string text = "chain " + bounds_key(graph, place.chain) + " in";
+        if (place.enclosing.empty()) {
+            REQUIRE(decomposition.is_root(place.site));
+            text += " root";
+        } else {
+            // The site handle and the innermost bounds name the same site.
+            REQUIRE(!decomposition.is_root(place.site));
+            REQUIRE(bounds_key(graph, oriented_bounds(decomposition, graph, place.site))
+                    == bounds_key(graph, place.enclosing.front()));
+        }
+        for (const SiteBounds& site : place.enclosing) {
+            text += " " + bounds_key(graph, site);
+        }
+        out[id] = text;
+    });
+    return out;
+}
+
+TEST_CASE("placement_of_node gives each node's chain and sites on both implementations",
+          "[site_walker]") {
+
+    SECTION("Three nested snarls") {
+        VG graph;
+        Node* n1 = graph.create_node("GCA");
+        Node* n2 = graph.create_node("T");
+        Node* n3 = graph.create_node("G");
+        Node* n4 = graph.create_node("CTGA");
+        Node* n5 = graph.create_node("GCA");
+        Node* n6 = graph.create_node("T");
+        Node* n7 = graph.create_node("G");
+        Node* n8 = graph.create_node("CTGA");
+        graph.create_edge(n1, n2);
+        graph.create_edge(n1, n8);
+        graph.create_edge(n2, n3);
+        graph.create_edge(n2, n6);
+        graph.create_edge(n3, n4);
+        graph.create_edge(n3, n5);
+        graph.create_edge(n4, n5);
+        graph.create_edge(n5, n7);
+        graph.create_edge(n6, n7);
+        graph.create_edge(n7, n8);
+        IntegratedSnarlFinder finder(graph);
+        DecompositionPair pair(graph, finder);
+        const map<nid_t, string> placed = node_placements(pair.adapter, graph);
+        REQUIRE(placed == node_placements(pair.distance_index, graph));
+        // A node that bounds a site is in that site's chain, held by the chain's parent.
+        REQUIRE(placed.at(1) == "chain 1+/8+ in root");
+        REQUIRE(placed.at(8) == "chain 1+/8+ in root");
+        REQUIRE(placed.at(2) == "chain 2+/7+ in 1+/8+");
+        REQUIRE(placed.at(7) == "chain 2+/7+ in 1+/8+");
+        REQUIRE(placed.at(3) == "chain 3+/5+ in 2+/7+ 1+/8+");
+        REQUIRE(placed.at(5) == "chain 3+/5+ in 2+/7+ 1+/8+");
+        // A node that bounds no site is a chain of its own, inside the innermost site.
+        REQUIRE(placed.at(4) == "chain 4+/4+ in 3+/5+ 2+/7+ 1+/8+");
+        REQUIRE(placed.at(6) == "chain 6+/6+ in 2+/7+ 1+/8+");
+
+        // A chain of one node has a key, and it differs from its neighbours'.
+        for (const SnarlDecomposition* decomposition :
+             {(const SnarlDecomposition*)&pair.adapter,
+              (const SnarlDecomposition*)&pair.distance_index}) {
+            const ChildChain four = placement_of_node(*decomposition, graph, 4).chain;
+            REQUIRE(graph.get_id(four.start) == 4);
+            REQUIRE(graph.get_id(four.end) == 4);
+            const size_t expected_key = ((size_t)4 * 1000003) ^ (size_t)4;
+            REQUIRE(chain_key_of(graph, four) == expected_key);
+            REQUIRE(chain_key_of(graph, four)
+                    != chain_key_of(graph, placement_of_node(*decomposition, graph, 3).chain));
+            REQUIRE(chain_key_of(graph, placement_of_node(*decomposition, graph, 6).chain)
+                    != chain_key_of(graph, placement_of_node(*decomposition, graph, 2).chain));
+        }
+    }
+
+    SECTION("Random graphs") {
+        std::default_random_engine generator(test_seed_source());
+        size_t compared = 0;
+        size_t nested = 0;
+        for (double chain_flip_probability : {0.0, 0.5}) {
+            for (size_t repeat = 0; repeat < 50; repeat++) {
+                size_t bases = std::uniform_int_distribution<size_t>(50, 300)(generator);
+                size_t variant_bases = std::uniform_int_distribution<size_t>(1, bases / 20)(generator);
+                size_t variant_count = std::uniform_int_distribution<size_t>(1, bases / 30)(generator);
+                VG base_graph;
+                random_graph(bases, variant_bases, variant_count, &base_graph);
+                bdsg::HashGraph graph = randomly_flipped_nodes(base_graph, 0.5, generator);
+                IntegratedSnarlFinder base_finder(graph);
+                SnarlDecompositionFuzzer finder(&graph, &base_finder, chain_flip_probability,
+                                                generator);
+                DecompositionPair pair(graph, finder);
+                const map<nid_t, string> placed = node_placements(pair.adapter, graph);
+                REQUIRE(placed.size() == graph.get_node_count());
+                if (!pair.has_known_difference()) {
+                    REQUIRE(placed == node_placements(pair.distance_index, graph));
+                    ++compared;
+                }
+                for (const auto& entry : placed) {
+                    nested += entry.second.find(" root") == string::npos ? 1 : 0;
+                }
+            }
+        }
+        // The comparison is not vacuous.
+        REQUIRE(compared > 10);
+        REQUIRE(nested > 0);
+    }
+}
+
 TEST_CASE("SiteWalker visits the same sites on both implementations", "[site_walker]") {
 
     SECTION("Three nested snarls") {

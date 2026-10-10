@@ -161,6 +161,23 @@ ChildChain chain_of_site(const SnarlDecomposition& decomposition, const HandleGr
     return oriented_bounds(decomposition, graph, decomposition.get_parent(site));
 }
 
+NodePlacement placement_of_node(const SnarlDecomposition& decomposition, const HandleGraph& graph,
+                                nid_t id) {
+    // A node's parent is its chain, which is the node alone when it bounds no site, and the
+    // chain's parent is a site or the root.
+    const net_handle_t chain = decomposition.get_parent(
+        decomposition.get_net(graph.get_handle(id, false), &graph));
+    NodePlacement out;
+    out.site = decomposition.get_parent(chain);
+    out.chain = oriented_bounds(decomposition, graph, chain);
+    if (!decomposition.is_root(out.site)) {
+        out.enclosing.push_back(oriented_bounds(decomposition, graph, out.site));
+        const vector<SiteBounds> above = enclosing_sites(decomposition, graph, out.site);
+        out.enclosing.insert(out.enclosing.end(), above.begin(), above.end());
+    }
+    return out;
+}
+
 size_t chain_key_of(const HandleGraph& graph, const ChildChain& chain) {
     const nid_t first = graph.get_id(chain.start);
     const nid_t second = graph.get_id(chain.end);
