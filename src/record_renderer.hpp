@@ -35,7 +35,8 @@ public:
     /// records it rendered when `show_progress` is set.
     void render(StagedSiteTable& staged, const PhaseTable& phases, const ReadStrandTable& strands,
                 const GenotypeLinker& linker, AnchorCollector* anchors,
-                const LineWriter& write_line, bool show_progress) const;
+                const LineWriter& write_line, bool show_progress,
+                const function<void()>& before_lines = nullptr) const;
 
 private:
     /// Turn a staged site into anchors, with the phase order, the haploid slot, the leaf test and

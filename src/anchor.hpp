@@ -133,9 +133,13 @@ struct AnchorCounters {
  * against, complemented if the read visits the node in reverse, must equal the graph's base. A
  * mismatch is counted in `counters.verify_failed`.
  */
+///
+/// A pin inside the node, as a site inside a node has, is given as `pin`: the node's bases before
+/// it along the node's forward strand. It is resolved as an exit pin is, against the node base just
+/// before it in the site's direction, and `exit_pin` is then ignored.
 AnchorPlacement resolve_anchor_pin(const SiteRead& read, const HandleGraph& graph,
                                    nid_t node_id, bool site_backward, bool exit_pin,
-                                   AnchorCounters& counters);
+                                   AnchorCounters& counters, int64_t pin = -1);
 
 
 /**
@@ -206,6 +210,13 @@ struct AnchorSiteEvidence {
     bool length_weighted = true;
     nid_t start_node = 0;
     nid_t end_node = 0;
+    /// Where each pin lies in its node: the node's bases before it, along the node's forward
+    /// strand. The start pin follows its node and the end pin precedes its node, read in the site's
+    /// direction, unless the site lies inside one node, whose pins are on either side of its base.
+    uint32_t start_pin = 0;
+    uint32_t end_pin = 0;
+    /// Whether the site lies inside one node, so that its two pins are distinct places in it.
+    bool inside_node = false;
 
     float rel_at(size_t read, size_t allele) const {
         return rel[read * n_alleles + allele];
@@ -302,6 +313,8 @@ public:
     };
     struct Anchor {
         nid_t node = 0;
+        /// Where the pin lies in `node`: the node's bases before it, along its forward strand.
+        uint32_t pin = 0;
         string snarl;
         /// Which slot of the chosen phased pair this anchor holds: slot i is field i of the
         /// record's `GT` at the same site ID, slot 0 the left allele and slot 1 the right. A

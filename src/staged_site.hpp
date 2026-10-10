@@ -270,8 +270,15 @@ public:
 
     /// How many sites the render queues hold.
     size_t queued_count() const;
+    /// The nested sites the hand-off kept from the render, with no line of their own: those an
+    /// enclosing block spells and those off the reference. Their parents' records spell their
+    /// chosen alleles. Each keeps its walks and genotype but not its scores.
+    vector<StagedSite>& unrendered() { return held_back; }
+    /// Free the sites the hand-off kept, once the render is done.
+    void release_unrendered() { vector<StagedSite>().swap(held_back); }
 
 private:
+    vector<StagedSite> held_back;
     /// The render queues, one per thread: the top-level sites, and after the hand-off also the
     /// nested ones that get a line of their own.
     vector<vector<StagedSite>> queues;

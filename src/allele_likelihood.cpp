@@ -1543,6 +1543,17 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
     // the same order: `add_read` drops a read that placed on nothing, so the evidence follows what
     // it kept rather than what was offered.
     unique_ptr<AnchorSiteEvidence> anchor_evidence;
+    // Where the two pins lie in their nodes, along each node's forward strand: the start pin follows
+    // the start node and the end pin precedes the end node, in the site's direction, and a site
+    // inside a node pins on either side of its base.
+    const bool start_backward = graph.get_is_reverse(site.start);
+    const bool end_backward = graph.get_is_reverse(site.end);
+    int64_t start_pin = start_backward ? 0 : (int64_t)graph.get_length(site.start);
+    int64_t end_pin = end_backward ? (int64_t)graph.get_length(site.end) : 0;
+    if (site.inside_node) {
+        start_pin = start_backward ? (int64_t)site.offset + 1 : (int64_t)site.offset;
+        end_pin = start_backward ? (int64_t)site.offset : (int64_t)site.offset + 1;
+    }
     // Read phasing needs only the `rel` rows, without read names or positions. Built only when
     // anchors are not being written, since the anchor evidence already contains the rows.
     unique_ptr<PhaseReadEvidence> phase_evidence;
@@ -1556,6 +1567,9 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
         anchor_evidence->n_alleles = traversals.size();
         anchor_evidence->start_node = graph.get_id(site.start);
         anchor_evidence->end_node = graph.get_id(site.end);
+        anchor_evidence->inside_node = site.inside_node;
+        anchor_evidence->start_pin = (uint32_t)start_pin;
+        anchor_evidence->end_pin = (uint32_t)end_pin;
         anchor_evidence->length_weighted = params.length_weighted_mixture;
         // The alleles as spelled, for the mixture weights the per-read score uses. Computed here
         // whatever the mixture setting, because the score's weighting is its own decision.
@@ -1674,10 +1688,12 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
             record.mismap = (float)mismap;
             record.start_pin = resolve_anchor_pin(read, graph, graph.get_id(site.start),
                                                   graph.get_is_reverse(site.start), true,
-                                                  anchor_pin_counters);
+                                                  anchor_pin_counters,
+                                                  site.inside_node ? start_pin : -1);
             record.end_pin = resolve_anchor_pin(read, graph, graph.get_id(site.end),
                                                 graph.get_is_reverse(site.end), false,
-                                                anchor_pin_counters);
+                                                anchor_pin_counters,
+                                                site.inside_node ? end_pin : -1);
             anchor_evidence->reads.push_back(std::move(record));
         }
     });

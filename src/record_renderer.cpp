@@ -150,12 +150,15 @@ void RecordRenderer::hand_off(StagedSiteTable& staged, const PhaseTable& phases,
 void RecordRenderer::render(StagedSiteTable& staged, const PhaseTable& phases,
                             const ReadStrandTable& strands, const GenotypeLinker& linker,
                             AnchorCollector* anchors, const LineWriter& write_line,
-                            bool show_progress) const {
+                            bool show_progress, const function<void()>& before_lines) const {
     // Every linkage pass is done, so the records move to the render, once, which also keeps their
     // anchors from being collected twice.
     hand_off(staged, phases, strands, linker, anchors, show_progress);
     if (!staged.active()) {
         return;
+    }
+    if (before_lines) {
+        before_lines();
     }
     // The records are nested chains as well as top-level sites, and each carries its own nesting
     // in its `StagedSite`.

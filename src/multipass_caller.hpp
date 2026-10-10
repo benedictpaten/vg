@@ -184,12 +184,39 @@ public:
 
 private:
 
+    /// The alleles a site's record spells, by traversal: each called ALT, on the first strand of
+    /// the site's phase that carries it, with every site staged under it spelled by its own chosen
+    /// allele on that strand. A traversal the splice did not change is left empty.
+    struct SplicedAlleles {
+        vector<Traversal> travs;
+        AlleleSequences sequences;
+    };
+
     /// The steps the output adds to `site`'s record: symbolic collapsing and the block count with
     /// nested calling, phasing from the linkage model, the GL layout of the read-likelihood
     /// genotyper, block records, the quality fields of a genotype the linkage model moved, and
     /// telling the linkage model the site's allele numbering. Each does nothing when its part is
     /// turned off. The steps read `site`, which must outlive them.
-    VCFOutputCaller::SiteRecordSteps record_steps(const StagedSite& site);
+    /// `spliced`, when not null, holds the alleles the site's record spells (see `splice`), which
+    /// its blocks spell too.
+    VCFOutputCaller::SiteRecordSteps record_steps(const StagedSite& site,
+                                                  const SplicedAlleles* spliced = nullptr);
+
+    /// The staged sites under each site, by the parent's record key, for the splice. Built once
+    /// the records have moved to the render, and then only read.
+    unordered_map<size_t, vector<const StagedSite*>> splice_children;
+    void index_splice_children();
+
+    /// Fill `out` for `site` (see `SplicedAlleles`). Returns false when no allele changed.
+    bool splice(const StagedSite& site, SplicedAlleles& out) const;
+
+    /// Allele `trav` of `site`, on strand `strand` of its parent's phase, with each child staged
+    /// under it spelled by its chosen allele on that strand, recursively, as a walk and the
+    /// sequence of each of its steps. `haploid` says the site has one strand, which all its
+    /// one-copy children are on. Returns false, leaving `walk` and `steps` empty, when no child
+    /// changes the allele.
+    bool spliced_allele(const StagedSite& site, int trav, int strand, bool haploid,
+                        Traversal& walk, StepSequences& steps) const;
 
     /// Give `record` the quality fields of its chosen genotype, if the linkage model moved its
     /// site's genotype (see ReadLikelihoodSnarlCaller::rewrite_quality_for_chosen_genotype).

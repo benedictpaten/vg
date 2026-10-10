@@ -126,7 +126,7 @@ static MappingExtent extent_of(const Mapping& m, size_t read_start) {
 
 AnchorPlacement resolve_anchor_pin(const SiteRead& read, const HandleGraph& graph,
                                    nid_t node_id, bool site_backward, bool exit_pin,
-                                   AnchorCounters& counters) {
+                                   AnchorCounters& counters, int64_t pin) {
     AnchorPlacement out;
     const Alignment& aln = *read.aln;
     const Path& path = aln.path();
@@ -194,8 +194,18 @@ AnchorPlacement resolve_anchor_pin(const SiteRead& read, const HandleGraph& grap
     // The node base the pin is defined against, in node-forward coordinates.
     //   exit  (S) pin: the node's last base in the site's direction; the pin follows it.
     //   entry (E) pin: the node's first base in the site's direction; the pin precedes it.
-    const size_t q_fwd = exit_pin ? (site_backward ? 0 : node_len - 1)
-                                  : (site_backward ? node_len - 1 : 0);
+    if (pin >= 0) {
+        // A pin inside the node is resolved as an exit pin, against the base before it.
+        exit_pin = true;
+        const int64_t before = site_backward ? pin : pin - 1;
+        if (before < 0 || before >= (int64_t)node_len) {
+            ++counters.unaligned_base;
+            return out;
+        }
+    }
+    const size_t q_fwd = pin >= 0 ? (size_t)(site_backward ? pin : pin - 1)
+                                  : exit_pin ? (site_backward ? 0 : node_len - 1)
+                                             : (site_backward ? node_len - 1 : 0);
     // The same base in the orientation the read visits the node in, in which the mapping's offsets
     // are measured.
     const size_t q_vis = is_rev ? (node_len - 1 - q_fwd) : q_fwd;
@@ -440,14 +450,16 @@ void build_site_anchors(const AnchorSiteEvidence& evidence, const vector<int>& g
         evidence.length_weighted, slot_allele);
 
     // Two anchors per slot: one at each pin. The end pin is skipped where the site's two boundaries
-    // are the same node, since the anchors would then be indistinguishable.
-    bool degenerate = evidence.start_node == evidence.end_node;
+    // are the same node, since the anchors would then be indistinguishable; a site inside one node
+    // instead has its pins on either side of its base.
+    bool degenerate = evidence.start_node == evidence.end_node && !evidence.inside_node;
     if (degenerate) {
         ++counters.degenerate_site;
     }
     vector<AnchorWriter::Anchor> start_anchors(n_slots), end_anchors(n_slots);
     for (size_t i = 0; i < n_slots; ++i) {
         start_anchors[i].node = evidence.start_node;
+        start_anchors[i].pin = evidence.start_pin;
         start_anchors[i].snarl = snarl_id;
         start_anchors[i].slot = (int)i + base_slot;
         start_anchors[i].allele = slot_allele[i];
@@ -455,6 +467,7 @@ void build_site_anchors(const AnchorSiteEvidence& evidence, const vector<int>& g
         start_anchors[i].explained = explained;
         end_anchors[i] = start_anchors[i];
         end_anchors[i].node = evidence.end_node;
+        end_anchors[i].pin = evidence.end_pin;
     }
 
     // Count reads sharing a name at this site, which cannot be told apart once the file is
@@ -809,6 +822,9 @@ bool AnchorWriter::write(const string& path, const string& graph_name, const str
         if (a.slot != b.slot) {
             return a.slot < b.slot;
         }
+        if (a.pin != b.pin) {
+            return a.pin < b.pin;
+        }
         return written_before(a, b, names_table);
     });
 
@@ -866,7 +882,7 @@ bool AnchorWriter::write(const string& path, const string& graph_name, const str
         return false;
     }
     // The format version, raised whenever the columns or their meaning change.
-    out << "#anchors-version\t7\n";
+    out << "#anchors-version\t8\n";
     // Which vg wrote the file, since values can change between versions of vg while the format
     // version does not. Consumers skip unknown '#' lines.
     out << "#vg-version\t" << Version::get_version() << "\n";
@@ -952,7 +968,10 @@ bool AnchorWriter::write(const string& path, const string& graph_name, const str
         << "UNROUNDED mean, while the R rows it averages are written to one decimal, so "
         << "re-deriving it from them lands within about 0.05 rather than exactly. From v6\n";
     out << "#reads-interned\t" << reads.size() << "\n";
-    out << "#H\tA\tnode\tsnarl\tslot\tallele\tgqn\texplained\treliability\n";
+    out << "#note\tpin is where the anchor lies in its node: the node's bases before it, along the "
+           "node's forward strand. A site between two nodes pins at a node end; a site inside one "
+           "node, as an off-panel SNV is, pins on either side of its base. From v8\n";
+    out << "#H\tA\tnode\tsnarl\tslot\tallele\tgqn\texplained\treliability\tpin\n";
     out << "#H\tR\tread_id\tstrand\toffset\tscore\n";
     for (size_t i = 0; i < names.size(); ++i) {
         out << "#read\t" << i << "\t" << names[i] << "\n";
@@ -971,7 +990,7 @@ bool AnchorWriter::write(const string& path, const string& graph_name, const str
         } else {
             os << std::setprecision(2) << a.reliability;
         }
-        os << "\n";
+        os << "\t" << a.pin << "\n";
         for (const ReadRow& r : a.reads) {
             os << "R\t" << table_index[r.read] << "\t" << (int)r.direction << "\t" << r.offset << "\t"
                << std::setprecision(1) << r.score << "\n";

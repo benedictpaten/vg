@@ -237,7 +237,8 @@ void MultiPassCaller::report_descent_instrumentation() const {
     }
 }
 
-VCFOutputCaller::SiteRecordSteps MultiPassCaller::record_steps(const StagedSite& site) {
+VCFOutputCaller::SiteRecordSteps MultiPassCaller::record_steps(const StagedSite& site,
+                                                              const SplicedAlleles* spliced) {
     // Each step reads the staged site rather than the Snarl and SnarlTraversals emit_variant
     // passes, which are the site's bounds and walks in another form.
     VCFOutputCaller::SiteRecordSteps steps;
@@ -263,16 +264,21 @@ VCFOutputCaller::SiteRecordSteps MultiPassCaller::record_steps(const StagedSite&
         // Every call info this caller writes is the read-likelihood genotyper's.
         return call_info != nullptr ? GLLayout::Colexicographic : GLLayout::IMajor;
     };
-    steps.write_blocks = [this, &site](const PathPositionHandleGraph& graph, const Snarl&,
-                                       const vector<SnarlTraversal>&, const vector<int>& genotype,
-                                       int ref_trav_idx, const SiteRecord& record,
-                                       GLLayout gl_layout, bool genotype_snarls) {
-        return block_records.write(graph, site.children, site.travs, genotype, ref_trav_idx,
-                                   sample_name, output.get_translation(), record, gl_layout,
-                                   genotype_snarls, [this](vcflib::Variant& line, size_t block) {
+    steps.write_blocks = [this, &site, spliced](const PathPositionHandleGraph& graph,
+                                                const Snarl&, const vector<SnarlTraversal>&,
+                                                const vector<int>& genotype, int ref_trav_idx,
+                                                const SiteRecord& record, GLLayout gl_layout,
+                                                bool genotype_snarls) {
+        // The blocks spell the alleles the site record spells.
+        return block_records.write(graph, site.children,
+                                   spliced != nullptr ? spliced->travs : site.travs, genotype,
+                                   ref_trav_idx, sample_name, output.get_translation(), record,
+                                   gl_layout, genotype_snarls,
+                                   [this](vcflib::Variant& line, size_t block) {
                                        finish_moved_record(line);
                                        return output.add_variant(line, block);
-                                   });
+                                   },
+                                   spliced != nullptr ? &spliced->sequences : &site.sequences);
     };
     steps.finish_record = [this](vcflib::Variant& record) {
         finish_moved_record(record);
@@ -489,22 +495,247 @@ void MultiPassCaller::render_retained_records() {
         staged_sites, phase_table, read_strands, linker,
         anchor_collector.is_enabled() ? &anchor_collector : nullptr,
         [&](const StagedSite& site, const vector<int>& genotype) {
+            // A parent spells its children's chosen alleles.
+            SplicedAlleles spliced;
+            const bool is_spliced = splice(site, spliced);
+            const vector<Traversal>& spelled = is_spliced ? spliced.travs : site.travs;
+            const AlleleSequences& spelled_steps =
+                is_spliced ? spliced.sequences : site.sequences;
             // The VCF writer and the genotyper's record fields still take a Snarl and
             // SnarlTraversals.
             output.emit_variant(graph, snarl_caller, snarl_of(graph, site.bounds),
                                 snarl_traversals_of(graph, site.travs), genotype,
                                 site.ref_trav_idx, site.call_info, site.ref_path_name,
                                 site.ref_offset, genotype_snarls, site.ploidy,
-                                record_steps(site),
+                                record_steps(site, is_spliced ? &spliced : nullptr),
                                 // Each allele is spelled as the site holds it: by its step
                                 // sequences where it has them, or else by its walk.
                                 [&](const vector<SnarlTraversal>&, const vector<int>&, int trav,
                                     int, int) {
-                                    return allele_sequence(graph, site.travs[trav],
-                                                           own_sequences(&site.sequences, trav));
+                                    return allele_sequence(graph, spelled[trav],
+                                                           own_sequences(&spelled_steps, trav));
                                 });
         },
-        show_progress);
+        show_progress, [&]() { index_splice_children(); });
+    splice_children.clear();
+    staged_sites.release_unrendered();
+}
+
+void MultiPassCaller::index_splice_children() {
+    splice_children.clear();
+    if (!emit_phasing || !phase_table.has_rendered()) {
+        return;
+    }
+    auto file = [&](const StagedSite& site) {
+        if (site.parent_record_key != 0 && !site.dropped) {
+            splice_children[site.parent_record_key].push_back(&site);
+        }
+    };
+    for (size_t q = 0; q < staged_sites.queue_count(); ++q) {
+        for (const StagedSite& site : staged_sites.queue(q)) {
+            file(site);
+        }
+    }
+    for (const StagedSite& site : staged_sites.unrendered()) {
+        file(site);
+    }
+}
+
+bool MultiPassCaller::splice(const StagedSite& site, SplicedAlleles& out) const {
+    if (splice_children.empty() || !splice_children.count(site.record_key)) {
+        return false;
+    }
+    const LinkageCollector::PhaseCall* phase = phase_table.rendered(site.record_key);
+    if (phase == nullptr) {
+        return false;
+    }
+    bool changed = false;
+    const int strands = phase->ploidy == 1 ? 1 : 2;
+    int first_trav = -1;
+    for (int strand = 0; strand < strands; ++strand) {
+        const int trav = strand == 0 ? phase->trav_first : phase->trav_second;
+        if (trav < 0 || trav >= (int)site.travs.size() || trav == site.ref_trav_idx
+            || trav == first_trav) {
+            // The reference is spelled as the reference, and an allele as on its first strand.
+            continue;
+        }
+        first_trav = trav;
+        Traversal walk;
+        StepSequences steps;
+        if (spliced_allele(site, trav, strand, strands == 1, walk, steps)) {
+            if (!changed) {
+                out.travs = site.travs;
+                out.sequences.assign(site.travs.size(), StepSequences());
+                for (size_t t = 0; t < site.travs.size(); ++t) {
+                    if (const StepSequences* own = own_sequences(&site.sequences, t)) {
+                        out.sequences[t] = *own;
+                    }
+                }
+                changed = true;
+            }
+            out.travs[trav] = std::move(walk);
+            out.sequences[trav] = std::move(steps);
+        }
+    }
+    return changed;
+}
+
+bool MultiPassCaller::spliced_allele(const StagedSite& site, int trav, int strand, bool haploid,
+                                     Traversal& walk, StepSequences& steps) const {
+    auto kids = splice_children.find(site.record_key);
+    if (kids == splice_children.end()) {
+        return false;
+    }
+    const Traversal& parent_walk = site.travs[trav];
+    // Where each node is first visited, which is where a child is entered.
+    unordered_map<nid_t, int> first_visit;
+    for (int i = (int)parent_walk.size() - 1; i >= 0; --i) {
+        first_visit[graph.get_id(parent_walk[i])] = i;
+    }
+    // Each child's chosen allele on this strand, as the steps that replace the parent's visits
+    // [begin, end).
+    struct Replacement {
+        int begin;
+        int end;
+        Traversal walk;
+        StepSequences steps;
+        bool inside_node;
+    };
+    vector<Replacement> replacements;
+    for (const StagedSite* child : kids->second) {
+        const LinkageCollector::PhaseCall* phase = phase_table.rendered(child->record_key);
+        if (phase == nullptr) {
+            continue;
+        }
+        int child_trav;
+        if (phase->ploidy == 1) {
+            // One copy, on the parent's strand that carries it.
+            if (!haploid && phase->nested_strand != strand) {
+                continue;
+            }
+            child_trav = phase->trav_first;
+        } else {
+            child_trav = strand == 0 ? phase->trav_first : phase->trav_second;
+        }
+        if (child_trav < 0 || child_trav >= (int)child->travs.size()) {
+            continue;
+        }
+        Replacement rep;
+        rep.inside_node = child->bounds.inside_node;
+        if (!spliced_allele(*child, child_trav, strand, phase->ploidy == 1, rep.walk, rep.steps)) {
+            rep.walk = child->travs[child_trav];
+            if (const StepSequences* own = own_sequences(&child->sequences, child_trav)) {
+                rep.steps = *own;
+            } else {
+                rep.steps.clear();
+                for (const handle_t& h : rep.walk) {
+                    rep.steps.push_back(graph.get_sequence(h));
+                }
+            }
+        }
+        if (rep.walk.empty()) {
+            continue;
+        }
+        // Where the parent's walk crosses the child, and which way.
+        auto at_start = first_visit.find(graph.get_id(rep.walk.front()));
+        auto at_end = first_visit.find(graph.get_id(rep.walk.back()));
+        if (at_start == first_visit.end() || at_end == first_visit.end()) {
+            continue;
+        }
+        bool turned = false;
+        if (rep.inside_node) {
+            rep.begin = at_start->second;
+            rep.end = rep.begin + 1;
+            turned = parent_walk[rep.begin] != rep.walk.front();
+        } else if (at_start->second <= at_end->second
+                   && parent_walk[at_start->second] == rep.walk.front()) {
+            rep.begin = at_start->second;
+            rep.end = at_end->second + 1;
+        } else if (at_end->second <= at_start->second
+                   && parent_walk[at_end->second] == graph.flip(rep.walk.back())) {
+            rep.begin = at_end->second;
+            rep.end = at_start->second + 1;
+            turned = true;
+        } else {
+            continue;
+        }
+        if (turned) {
+            // Read the child's allele the way the parent's walk reads it.
+            std::reverse(rep.walk.begin(), rep.walk.end());
+            std::reverse(rep.steps.begin(), rep.steps.end());
+            for (size_t i = 0; i < rep.walk.size(); ++i) {
+                rep.walk[i] = graph.flip(rep.walk[i]);
+                rep.steps[i] = reverse_complement(rep.steps[i]);
+            }
+            if (rep.inside_node && rep.walk.front() != parent_walk[rep.begin]) {
+                continue;
+            }
+        }
+        replacements.push_back(std::move(rep));
+    }
+    if (replacements.empty()) {
+        return false;
+    }
+    std::stable_sort(replacements.begin(), replacements.end(),
+                     [](const Replacement& a, const Replacement& b) { return a.begin < b.begin; });
+
+    const StepSequences* own = own_sequences(&site.sequences, trav);
+    walk.clear();
+    steps.clear();
+    bool changed = false;
+    size_t r = 0;
+    for (int i = 0; i < (int)parent_walk.size();) {
+        if (r < replacements.size() && replacements[r].begin < i) {
+            ++r;   // overlaps one already spliced
+            continue;
+        }
+        if (r < replacements.size() && replacements[r].begin == i) {
+            if (replacements[r].inside_node) {
+                // Every child inside this node changes the bases it differs from the node in.
+                string spelled = own != nullptr ? own->at(i) : graph.get_sequence(parent_walk[i]);
+                const string node_seq = graph.get_sequence(parent_walk[i]);
+                for (; r < replacements.size() && replacements[r].begin == i
+                       && replacements[r].inside_node;
+                     ++r) {
+                    const string& child_seq = replacements[r].steps.front();
+                    for (size_t b = 0; b < child_seq.size() && b < spelled.size()
+                                       && child_seq.size() == node_seq.size();
+                         ++b) {
+                        if (child_seq[b] != node_seq[b] && spelled[b] != child_seq[b]) {
+                            spelled[b] = child_seq[b];
+                            changed = true;
+                        }
+                    }
+                }
+                walk.push_back(parent_walk[i]);
+                steps.push_back(std::move(spelled));
+                ++i;
+                continue;
+            }
+            const Replacement& rep = replacements[r];
+            // The child's allele replaces the parent's route through it.
+            bool same = rep.end - rep.begin == (int)rep.walk.size();
+            for (int k = 0; same && k < (int)rep.walk.size(); ++k) {
+                same = parent_walk[rep.begin + k] == rep.walk[k]
+                       && rep.steps[k] == (own != nullptr ? own->at(rep.begin + k)
+                                                          : graph.get_sequence(rep.walk[k]));
+            }
+            changed = changed || !same;
+            walk.insert(walk.end(), rep.walk.begin(), rep.walk.end());
+            steps.insert(steps.end(), rep.steps.begin(), rep.steps.end());
+            i = rep.end;
+            ++r;
+            continue;
+        }
+        walk.push_back(parent_walk[i]);
+        steps.push_back(own != nullptr ? own->at(i) : graph.get_sequence(parent_walk[i]));
+        ++i;
+    }
+    if (!changed) {
+        walk.clear();
+        steps.clear();
+    }
+    return changed;
 }
 
 void MultiPassCaller::run_linkage_pass() {

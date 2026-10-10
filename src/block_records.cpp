@@ -204,7 +204,8 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
                              const vector<int>& genotype, int ref_trav_idx,
                              const string& sample_name, const NodeTranslation* translation,
                              const SiteRecord& record, GLLayout gl_layout, bool genotype_snarls,
-                             const function<bool(vcflib::Variant&, size_t)>& add_line) const {
+                             const function<bool(vcflib::Variant&, size_t)>& add_line,
+                             const AlleleSequences* sequences) const {
     const vcflib::Variant& site = record.variant;
     const map<int, int>& trav_to_allele = record.trav_to_allele;
     const int64_t site_position = record.unflattened_position;
@@ -256,10 +257,12 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
     };
     // `max(vb, 0)`, so that the helper never reads t[-1], even though callers already refuse
     // vb <= 0.
-    auto seq_of = [&](const Traversal& t, int vb, int ve) -> string {
+    // An allele with step sequences (`own`) is spelled by them.
+    auto seq_of = [&](const Traversal& t, int vb, int ve,
+                      const StepSequences* own = nullptr) -> string {
         string s;
         for (int v = std::max(vb, 0); v < ve && v < (int)t.size(); ++v) {
-            s += graph.get_sequence(t[v]);
+            s += own != nullptr ? own->at(v) : graph.get_sequence(t[v]);
         }
         return s;
     };
@@ -334,9 +337,13 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
         vector<Traversal> slot_span(genotype.size());
         vector<string> slot_str(genotype.size());
         vector<bool> slot_marker(genotype.size(), false);
-        auto append_visits = [](Traversal& span, const Traversal& t, int from, int to) {
+        // The span's visits, and what they spell: `own`'s step sequences where it has them.
+        string spelled;
+        auto append_visits = [&](Traversal& span, const Traversal& t, int from, int to,
+                                 const StepSequences* own = nullptr) {
             for (int v = std::max(from, 0); v < to && v < (int)t.size(); ++v) {
                 span.push_back(t[v]);
+                spelled += own != nullptr ? own->at(v) : graph.get_sequence(t[v]);
             }
         };
         for (size_t s = 0; s < genotype.size(); ++s) {
@@ -351,6 +358,8 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
                 continue;
             }
             const Traversal& t = called_traversals[haps[s].trav];
+            const StepSequences* own = own_sequences(sequences, haps[s].trav);
+            spelled.clear();
             // Every block that overlaps or touches the cluster lies inside it, since the clusters
             // are the unions of all blocks, so `next` walks the cluster's reference steps in order.
             size_t next = rb;
@@ -359,12 +368,12 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
                     append_visits(span, ref_trav, visit_of_step(ref_ranges, next, ref_trav),
                                   visit_of_step(ref_ranges, (size_t)b.ref_begin, ref_trav));
                     append_visits(span, t, visit_of_step(haps[s].ranges, (size_t)b.alt_begin, t),
-                                  visit_of_step(haps[s].ranges, (size_t)b.alt_end, t));
+                                  visit_of_step(haps[s].ranges, (size_t)b.alt_end, t), own);
                     next = (size_t)b.ref_end;
                 }
             }
             append_visits(span, ref_trav, visit_of_step(ref_ranges, next, ref_trav), ve);
-            slot_str[s] = seq_of(span, 0, (int)span.size());
+            slot_str[s] = spelled;
         }
 
         // VCF has no empty allele, so an indel takes the base before it, as flatten_common_allele_ends
@@ -644,13 +653,14 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
             }
             chain_crossed_twice = chain_crossed_twice || crosses_a_chain_twice(haps[s].sym);
             const Traversal& t = called_traversals[haps[s].trav];
+            const StepSequences* own = own_sequences(sequences, haps[s].trav);
             string as_blocks;
             size_t next = 0;
             for (const DiffBlock& b : haps[s].blocks) {
                 as_blocks += seq_of(ref_trav, visit_of_step(ref_ranges, next, ref_trav),
                                     visit_of_step(ref_ranges, (size_t)b.ref_begin, ref_trav));
                 as_blocks += seq_of(t, visit_of_step(haps[s].ranges, (size_t)b.alt_begin, t),
-                                    visit_of_step(haps[s].ranges, (size_t)b.alt_end, t));
+                                    visit_of_step(haps[s].ranges, (size_t)b.alt_end, t), own);
                 next = (size_t)b.ref_end;
             }
             as_blocks += seq_of(ref_trav, visit_of_step(ref_ranges, next, ref_trav),
@@ -661,7 +671,7 @@ int BlockRecordWriter::write(const PathPositionHandleGraph& graph, const SiteChi
             const string site_allele =
                 allele != trav_to_allele.end() && allele->second == 0
                     ? seq_of(ref_trav, visit_of_step(ref_ranges, 0, ref_trav), (int)ref_trav.size())
-                    : seq_of(t, visit_of_step(haps[s].ranges, 0, t), (int)t.size());
+                    : seq_of(t, visit_of_step(haps[s].ranges, 0, t), (int)t.size(), own);
             site_says_more = site_says_more || as_blocks != site_allele;
         }
         if (!site_says_more) {

@@ -127,7 +127,8 @@ public:
               const vector<Traversal>& called_traversals, const vector<int>& genotype,
               int ref_trav_idx, const string& sample_name, const NodeTranslation* translation,
               const SiteRecord& record, GLLayout gl_layout, bool genotype_snarls,
-              const function<bool(vcflib::Variant&, size_t)>& add_line) const;
+              const function<bool(vcflib::Variant&, size_t)>& add_line,
+              const AlleleSequences* sequences = nullptr) const;
 
     /// Print the counters to stderr. Prints nothing when no site was counted.
     void report() const;

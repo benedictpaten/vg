@@ -154,12 +154,16 @@ StagedSiteTable::HandOff StagedSiteTable::hand_off() {
         if (site.dropped) {
             continue;
         }
-        if (site.reported_inline) {
-            ++out.inline_unrendered;
-            continue;
-        }
-        if (site.no_reference) {
-            ++out.no_ref_unrendered;
+        if (site.reported_inline || site.no_reference) {
+            if (site.reported_inline) {
+                ++out.inline_unrendered;
+            } else {
+                ++out.no_ref_unrendered;
+            }
+            // Kept for its parent's record, which spells its chosen allele, without its scores.
+            site.set_call(nullptr, nullptr);
+            site.panel_cache.clear();
+            held_back.push_back(std::move(site));
             continue;
         }
         queues[next_queue % queues.size()].push_back(std::move(site));

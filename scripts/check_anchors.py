@@ -121,7 +121,7 @@ def main():
             if line.startswith("#"):
                 continue
             fields = line.rstrip("\n").split("\t")
-            if fields[0] == "A" and len(fields) == 8:
+            if fields[0] == "A" and len(fields) == 9:
                 current = (int(fields[1]), fields[2], int(fields[3]))
                 in_anchor = set()
             elif fields[0] == "R" and current is not None and len(fields) == 5:
@@ -159,8 +159,8 @@ def main():
                 continue
             fields = line.split("\t")
             if fields[0] == "A":
-                if len(fields) != 8:
-                    fail(f"line {lineno}: an A row has {len(fields)} fields, expected 8")
+                if len(fields) != 9:
+                    fail(f"line {lineno}: an A row has {len(fields)} fields, expected 9")
                     continue
                 node, snarl, slot = int(fields[1]), fields[2], int(fields[3])
                 # v7: gqn is signed in [-1, 1], and `.` means the site offered no gap to normalise.
@@ -226,7 +226,7 @@ def main():
 
     if version is None:
         fail("no #anchors-version header, so the format is unknown")
-    elif version != "7":
+    elif version != "8":
         # v3 and v4 are refused rather than tolerated: both have these columns and both get `slot`
         # wrong in a way that reads cleanly and joins wrongly. v3 wrote it in allele order for
         # every site; v4 fixed the diploid pair and still wrote 0 for both strands of a nested
@@ -235,9 +235,10 @@ def main():
         # v6 is refused on the same standard: it wrote `.` for any negative gqn, because -1 was the
         # "no gap to normalise" sentinel, so on the records the linkage layer moved -- the ones
         # carrying a 37.8% false-positive rate -- the signed value silently became "unknown". Same
-        # columns, same widths, joins wrongly.
-        fail(f"#anchors-version {version} is not the one this script understands (7)")
-    if version == "7" and not id_name:
+        # columns, same widths, joins wrongly. v7 lacks the pin column, which v8 adds at the end
+        # of the A row so that an anchor inside a node can say where in it it lies.
+        fail(f"#anchors-version {version} is not the one this script understands (8)")
+    if version == "8" and not id_name:
         fail("no #read table, but every version from 2 on interns every read name")
 
     if shared_names:
