@@ -132,7 +132,24 @@ pair<string, int64_t> MultiPassCaller::reference_position(nid_t node, uint32_t o
 }
 
 void MultiPassCaller::write_edit_dump() const {
-    if (edit_source == nullptr || edit_dump.empty()) {
+    if (edit_source == nullptr) {
+        return;
+    }
+    {
+        // The feature's one block of counters, written only when it is on.
+        size_t top = 0, nested = 0, staged = 0, unplaced = 0;
+        for (const EditOutcome& o : edit_outcomes->sorted()) {
+            top += o.placed == "top";
+            nested += o.placed == "nested";
+            unplaced += o.placed != "top" && o.placed != "nested";
+            staged += o.staged;
+        }
+        cerr << "[vg call] off-panel: " << edit_source->counted_edit_candidates().size()
+             << " candidates counted; the call bar's genotyped as " << top << " top-level and "
+             << nested << " nested sites, " << unplaced << " left unplaced; " << staged
+             << " staged with their ALT" << endl;
+    }
+    if (edit_dump.empty()) {
         return;
     }
     ofstream out(edit_dump);

@@ -84,10 +84,9 @@ public:
 
     /// Genotype and stage, as top-level sites, the edit sites of the off-panel candidates
     /// `candidates` (sorted) that no site holds and that the direct pass did not reach: those
-    /// on a node that starts no top-level site, as at a chain's end. A top-level site genotypes
-    /// those on the node it starts at, while their reads are in memory, and an edit site a site
-    /// holds is one of that site's children, genotyped and staged in its descent. Runs on several
-    /// threads.
+    /// on a node that bounds no top-level site. A top-level site genotypes those on its two
+    /// boundary nodes, while their reads are in memory, and an edit site a site holds is one of
+    /// that site's children, genotyped and staged in its descent. Runs on several threads.
     void genotype_top_level_edits(vector<EditCandidate> candidates);
 
 private:

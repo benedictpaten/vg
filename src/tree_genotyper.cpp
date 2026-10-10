@@ -20,13 +20,15 @@ bool TreeGenotyper::genotype(const SiteView& site) {
     // A top-level site has no parent context.
     const bool genotyped = genotype_tree(site, "", make_pair(0, 0), nullptr, -1, NestingPlacement());
     if (parts.edit_source != nullptr && site.enclosing.empty()) {
-        // The edit sites on the chain node this site starts at, which no site holds, while the
-        // node's reads are in memory. Each chain node but the last starts one site.
-        vector<EditCandidate> on_start;
-        parts.edit_source->for_each_edit_candidate(
-            {parts.graph->get_id(site.bounds.start)},
-            [&](const EditCandidate& c) { on_start.push_back(c); });
-        genotype_free_edits(std::move(on_start));
+        // The edit sites on the chain nodes this site lies between, which no site holds, while
+        // their reads are in memory. A node between two sites is taken by the first to reach it.
+        for (const handle_t& bound : {site.bounds.start, site.bounds.end}) {
+            vector<EditCandidate> on_bound;
+            parts.edit_source->for_each_edit_candidate(
+                {parts.graph->get_id(bound)},
+                [&](const EditCandidate& c) { on_bound.push_back(c); });
+            genotype_free_edits(std::move(on_bound));
+        }
     }
     return genotyped;
 }
