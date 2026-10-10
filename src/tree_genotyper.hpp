@@ -109,6 +109,10 @@ private:
     unordered_set<nid_t> free_edit_nodes;
     size_t after_pass_nodes = 0;
 
+    /// Append to `out` the nodes no site holds that run along a reference path from `bound`, in
+    /// either direction, until a node a site holds, at most a fixed number each way.
+    void free_nodes_along_reference(nid_t bound, vector<nid_t>& out) const;
+
     /// The candidates the call bar admits, one per base: the ALT the most fragments carry.
     vector<EditCandidate> admitted(vector<EditCandidate> candidates) const;
 

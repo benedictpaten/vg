@@ -33,15 +33,26 @@ bool TreeGenotyper::genotype(const SiteView& site) {
         parts.edit_source->for_each_edit_candidate(
             {first}, [&](const EditCandidate& c) { on_first.push_back(c); });
         genotype_free_edits(std::move(on_first));
+        // Then the far bound, and the nodes no site holds that run along the reference from
+        // either bound to the next site, through the trivial sites the walk does not visit, as
+        // far as they lie in the lower bound's window.
+        vector<nid_t> near;
         if (last != first) {
-            vector<EditCandidate> on_last;
-            if (parts.edit_source->for_each_edit_candidate(
-                    {first, last}, [&](const EditCandidate& c) {
-                        if (c.node == last) {
-                            on_last.push_back(c);
+            near.push_back(last);
+        }
+        for (nid_t bound : {first, last}) {
+            free_nodes_along_reference(bound, near);
+        }
+        for (nid_t node : near) {
+            vector<EditCandidate> on_node;
+            if (node != first && parts.edit_source->for_each_edit_candidate(
+                    {std::min(first, node), std::max(first, node)},
+                    [&](const EditCandidate& c) {
+                        if (c.node == node) {
+                            on_node.push_back(c);
                         }
                     }, false)) {
-                genotype_free_edits(std::move(on_last));
+                genotype_free_edits(std::move(on_node));
             }
         }
     }
@@ -526,6 +537,32 @@ vector<TreeGenotyper::HeldEdit> TreeGenotyper::edits_held_by(const SiteView& vie
         held.push_back(std::move(edit));
     }
     return held;
+}
+
+void TreeGenotyper::free_nodes_along_reference(nid_t bound, vector<nid_t>& out) const {
+    const PathPositionHandleGraph& graph = *parts.graph;
+    // At most this many nodes each way, which bounds the work per site.
+    const size_t limit = 64;
+    graph.for_each_step_on_handle(graph.get_handle(bound), [&](const step_handle_t& step) {
+        if (!parts.ref_offsets->count(graph.get_path_name(graph.get_path_handle_of_step(step)))) {
+            return true;
+        }
+        for (bool forward : {true, false}) {
+            step_handle_t at = step;
+            for (size_t k = 0; k < limit; ++k) {
+                if (forward ? !graph.has_next_step(at) : !graph.has_previous_step(at)) {
+                    break;
+                }
+                at = forward ? graph.get_next_step(at) : graph.get_previous_step(at);
+                const nid_t node = graph.get_id(graph.get_handle_of_step(at));
+                if (!parts.child_placer->placement_of(node).enclosing.empty()) {
+                    break;   // into a site
+                }
+                out.push_back(node);
+            }
+        }
+        return false;   // one reference step is enough
+    });
 }
 
 void TreeGenotyper::genotype_top_level_edits(vector<EditCandidate> candidates) {
