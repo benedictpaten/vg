@@ -1,4 +1,5 @@
 #include "site_values.hpp"
+#include "utility.hpp"
 
 #include <algorithm>
 
@@ -74,6 +75,33 @@ const StepSequences* own_sequences(const AlleleSequences* sequences, size_t alle
         return nullptr;
     }
     return &(*sequences)[allele];
+}
+
+size_t bases_before_site(const HandleGraph& graph, const SiteBounds& site) {
+    if (!site.inside_node) {
+        return 0;
+    }
+    return graph.get_is_reverse(site.start) ? graph.get_length(site.start) - 1 - site.offset
+                                            : site.offset;
+}
+
+EditSite snv_edit_site(const HandleGraph& graph, handle_t node, uint32_t offset, char alt) {
+    EditSite site;
+    site.bounds.start = node;
+    site.bounds.end = node;
+    site.bounds.inside_node = true;
+    site.bounds.offset = offset;
+    site.travs.assign(2, Traversal{node});
+    string spelled = graph.get_sequence(node);
+    const bool backward = graph.get_is_reverse(node);
+    spelled[bases_before_site(graph, site.bounds)] = backward ? reverse_complement(alt) : alt;
+    site.sequences.resize(2);
+    site.sequences[1].push_back(std::move(spelled));
+    return site;
+}
+
+string edit_site_id(nid_t node, uint32_t offset, char kind, const string& alt) {
+    return "op" + std::to_string(node) + "." + std::to_string(offset) + "." + kind + alt;
 }
 
 string allele_sequence(const HandleGraph& graph, const Traversal& walk, const StepSequences* own) {

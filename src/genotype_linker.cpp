@@ -50,8 +50,12 @@ SiteLocus GenotypeLinker::site_locus(const SiteBounds& site, const string& ref_p
                                      int ref_offset) const {
     // The position before the record's alleles are trimmed, which can move POS.
     // `get_ref_position` names the base path, as in "CHM13#0#chr20".
-    return locus_of(get_ref_position(*reader.graph, site.start, site.end, ref_path_name,
-                                     ref_offset));
+    // A site inside a node is placed at its own base, so that the sites inside one node are
+    // ordered and spaced. Its bounds read the node the way the reference path does.
+    pair<string, int64_t> position =
+        get_ref_position(*reader.graph, site.start, site.end, ref_path_name, ref_offset);
+    position.second += (int64_t)bases_before_site(*reader.graph, site);
+    return locus_of(position);
 }
 
 SiteLocus GenotypeLinker::off_reference_site_locus(const string& ref_path_name,

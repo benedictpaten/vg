@@ -31,7 +31,8 @@ using handlegraph::SnarlDecomposition;
  * `start` and `end` that face into the site, so the site lies between two
  * nodes, which may be one node, as in a cyclic chain. A site can instead lie
  * inside one node (`inside_node`). `start` and `end` are then that node,
- * read the same way, and the boundary sides are the node's own two sides.
+ * read the same way, and the boundary sides are the sides of the base at
+ * `offset`.
  * The decomposition never gives bounds inside a node.
  */
 struct SiteBounds {
@@ -39,9 +40,13 @@ struct SiteBounds {
     handle_t end;
     /// Whether the site lies inside the node `start` and `end` both read.
     bool inside_node = false;
+    /// For a site inside a node, the offset of its first base along the node's forward strand,
+    /// whichever way `start` reads the node. 0 for any other site.
+    uint32_t offset = 0;
 
     inline bool operator==(const SiteBounds& other) const {
-        return start == other.start && end == other.end && inside_node == other.inside_node;
+        return start == other.start && end == other.end && inside_node == other.inside_node
+               && offset == other.offset;
     }
 
     inline bool operator!=(const SiteBounds& other) const {

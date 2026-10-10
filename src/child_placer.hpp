@@ -153,6 +153,8 @@ public:
         unordered_map<nid_t, vector<int>> visits_of;
         /// The bases of the handles before each handle index; one longer than the walk.
         vector<int64_t> bases_before;
+        /// The walk, which must outlive this.
+        const Traversal* walk = nullptr;
     };
 
     /// How far along the first walk of `genotype` that crosses `child` the child is entered, in

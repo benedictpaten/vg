@@ -1362,6 +1362,21 @@ GraphAlignedAlleleLikelihoodCalculator::id_window_read_stats(
     return stats;
 }
 
+/// The bases of `a` outside the longest prefix and suffix it shares with `b`, which do not
+/// overlap.
+static size_t bases_not_shared(const string& a, const string& b) {
+    const size_t limit = min(a.size(), b.size());
+    size_t prefix = 0;
+    while (prefix < limit && a[prefix] == b[prefix]) {
+        ++prefix;
+    }
+    size_t suffix = 0;
+    while (suffix < limit - prefix && a[a.size() - 1 - suffix] == b[b.size() - 1 - suffix]) {
+        ++suffix;
+    }
+    return a.size() - prefix - suffix;
+}
+
 AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
     const SiteBounds& site, const vector<Traversal>& traversals,
     const vector<SiteBounds>& enclosing, int region_ploidy, const AlleleSequences* sequences) {
@@ -1373,13 +1388,21 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
         return builder.build();
     }
 
-    // Nodes making up the site, including its boundaries.
-    auto contents = site_contents(graph, site.start, site.end, true);
-    unordered_set<nid_t> site_nodes(contents.first.begin(), contents.first.end());
+    // Nodes making up the site, including its boundaries. A site inside a node is that node, and
+    // has no boundary node: its boundary sides are inside the node, so every read on the node
+    // tells its alleles apart, and the node's bases all count towards the depth term.
+    unordered_set<nid_t> site_nodes;
+    unordered_set<nid_t> boundary_nodes;
+    if (site.inside_node) {
+        site_nodes.insert(graph.get_id(site.start));
+    } else {
+        auto contents = site_contents(graph, site.start, site.end, true);
+        site_nodes.insert(contents.first.begin(), contents.first.end());
+        boundary_nodes = {graph.get_id(site.start), graph.get_id(site.end)};
+    }
     if (site_nodes.empty()) {
         return builder.build();
     }
-    unordered_set<nid_t> boundary_nodes{graph.get_id(site.start), graph.get_id(site.end)};
 
     // Merge the site's node IDs into ranges for the read source to query.
     vector<nid_t> sorted_ids(site_nodes.begin(), site_nodes.end());
@@ -1456,10 +1479,14 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
             // per site off the hot path; a node visited more than once by an allele
             // counts its sequence once, which is what "does this allele carry this
             // sequence" means.
-            vector<map<nid_t, size_t>> content(allele_steps.size());
+            //
+            // A node both alleles carry, but spelled differently by one allele's own sequence,
+            // is shared except for the bases its two spellings do not have in common: those
+            // outside their longest shared prefix and suffix.
+            vector<map<nid_t, const AlleleStep*>> content(allele_steps.size());
             for (size_t a = 0; a < allele_steps.size(); ++a) {
                 for (const AlleleStep& step : allele_steps[a]) {
-                    content[a][step.node_id] = step.sequence.size();
+                    content[a][step.node_id] = &step;
                 }
             }
             vector<vector<size_t>> unique_lengths(
@@ -1471,8 +1498,13 @@ AlleleReadLikelihoods GraphAlignedAlleleLikelihoodCalculator::compute(
                     }
                     size_t total = 0;
                     for (const auto& entry : content[a]) {
-                        if (!content[b].count(entry.first)) {
-                            total += entry.second;
+                        auto other = content[b].find(entry.first);
+                        if (other == content[b].end()) {
+                            total += entry.second->sequence.size();
+                        } else if ((entry.second->own_sequence || other->second->own_sequence)
+                                   && entry.second->sequence != other->second->sequence) {
+                            total += bases_not_shared(entry.second->sequence,
+                                                      other->second->sequence);
                         }
                     }
                     unique_lengths[a][b] = total;

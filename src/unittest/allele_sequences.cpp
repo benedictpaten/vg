@@ -108,5 +108,34 @@ TEST_CASE("No panel haplotype carries an allele with step sequences, whatever it
     }
 }
 
+TEST_CASE("An edit site changes one base inside a node, read either way along the node",
+          "[allele_sequences][off_panel]") {
+    bdsg::HashGraph graph;
+    make_snp_graph(graph);
+    const handle_t node = graph.get_handle(1);   // AAAA
+
+    SECTION("Read forward, the ALT replaces the base at the forward offset") {
+        EditSite site = snv_edit_site(graph, node, 1, 'G');
+        REQUIRE(site.bounds.inside_node);
+        REQUIRE(site.bounds.offset == 1);
+        REQUIRE(site.travs.size() == 2);
+        REQUIRE(own_sequences(&site.sequences, 0) == nullptr);
+        REQUIRE(allele_sequence(graph, site.travs[0], own_sequences(&site.sequences, 0)) == "AAAA");
+        REQUIRE(allele_sequence(graph, site.travs[1], own_sequences(&site.sequences, 1)) == "AGAA");
+        REQUIRE(bases_before_site(graph, site.bounds) == 1);
+    }
+
+    SECTION("Read backward, the ALT is complemented and the offset counted from the other end") {
+        EditSite site = snv_edit_site(graph, graph.flip(node), 1, 'G');
+        REQUIRE(allele_sequence(graph, site.travs[0], own_sequences(&site.sequences, 0)) == "TTTT");
+        REQUIRE(allele_sequence(graph, site.travs[1], own_sequences(&site.sequences, 1)) == "TTCT");
+        REQUIRE(bases_before_site(graph, site.bounds) == 2);
+    }
+
+    SECTION("Its ID has no underscore and names the node, offset and ALT") {
+        REQUIRE(edit_site_id(12, 3, 'S', "T") == "op12.3.ST");
+    }
+}
+
 }
 }

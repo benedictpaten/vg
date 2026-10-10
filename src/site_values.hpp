@@ -68,6 +68,28 @@ const StepSequences* own_sequences(const AlleleSequences* sequences, size_t alle
 /// The sequence an allele spells: its step sequences `own` when not null, or else its walk's.
 string allele_sequence(const HandleGraph& graph, const Traversal& walk, const StepSequences* own);
 
+/// For a site inside a node, how many of the node's bases come before the site's first base,
+/// read the way `site.start` reads the node. 0 for any other site.
+size_t bases_before_site(const HandleGraph& graph, const SiteBounds& site);
+
+/// A site inside one node whose alternate allele changes the node's bases from `site.offset` on:
+/// its bounds, its two alleles, REF then ALT, which both walk the node, and the ALT's spelling,
+/// as step sequences.
+struct EditSite {
+    SiteBounds bounds;
+    vector<Traversal> travs;
+    AlleleSequences sequences;
+};
+
+/// The edit site that replaces the base at forward offset `offset` of the node `node` reads with
+/// `alt`, given along the node's forward strand. The site is read the way `node` reads the node.
+EditSite snv_edit_site(const HandleGraph& graph, handle_t node, uint32_t offset, char alt);
+
+/// The ID of an edit site: `op<node>.<offset>.<kind><alt>`, with the offset and the ALT along the
+/// node's forward strand. It has no `_`, which `block_site_name` cuts at, and does not read as a
+/// pair of boundary visits.
+string edit_site_id(nid_t node, uint32_t offset, char kind, const string& alt);
+
 namespace multipass {
 
 

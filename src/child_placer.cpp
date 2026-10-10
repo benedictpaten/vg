@@ -86,7 +86,8 @@ int ChildPlacer::offset_of_child(const HandleGraph& graph, const Traversal& walk
     return -1;
 }
 
-ChildPlacer::ChildOffsets::ChildOffsets(const HandleGraph& graph, const Traversal& walk) {
+ChildPlacer::ChildOffsets::ChildOffsets(const HandleGraph& graph, const Traversal& walk)
+    : walk(&walk) {
     bases_before.assign(walk.size() + 1, 0);
     for (int i = 0; i < (int)walk.size(); ++i) {
         visits_of[graph.get_id(walk[i])].push_back(i);
@@ -103,8 +104,15 @@ int64_t ChildPlacer::ChildOffsets::base_offset(const HandleGraph& graph,
     auto start_visits = visits_of.find(start);
     auto end_visits = visits_of.find(end);
     if (child.inside_node) {
-        // The first visit is a whole crossing.
-        return start_visits == visits_of.end() ? -1 : bases_before[start_visits->second.front()];
+        // The first visit is a whole crossing, and the child starts at its base inside the node,
+        // read the way this visit reads the node.
+        if (start_visits == visits_of.end()) {
+            return -1;
+        }
+        const int visit = start_visits->second.front();
+        SiteBounds as_visited = child;
+        as_visited.start = (*walk)[visit];
+        return bases_before[visit] + (int64_t)bases_before_site(graph, as_visited);
     }
     const int none = numeric_limits<int>::max();
     const int first_start = start_visits == visits_of.end() ? none : start_visits->second.front();
@@ -174,6 +182,12 @@ int64_t ChildPlacer::base_offset_of_child(const Traversal& walk, const SiteBound
     int64_t bases = 0;
     for (int i = 0; i < entry && i < (int)walk.size(); ++i) {
         bases += (int64_t)graph->get_length(walk[i]);
+    }
+    if (child.inside_node) {
+        // The child starts at its base inside the node, read the way the walk reads the node.
+        SiteBounds as_visited = child;
+        as_visited.start = walk[entry];
+        bases += (int64_t)bases_before_site(*graph, as_visited);
     }
     return bases;
 }
