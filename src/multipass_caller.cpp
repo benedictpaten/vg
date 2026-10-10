@@ -1005,9 +1005,11 @@ int64_t MultiPassCaller::phase_record_genotype(size_t record_key,
     }
     const LinkageCollector::PhaseCall& phase = *found;
     if (phase.ploidy == 2 && phase.order_arbitrary
-        && !read_strands.read_ordered().count(record_key)) {
-        // Neither the panel nor the reads order the pair, so the record claims no phase. A
-        // one-copy chain keeps its `a|.` shape, which says which of its parent's strands it is on.
+        && !read_strands.read_ordered().count(record_key)
+        && !splice_children.count(record_key)) {
+        // Neither the panel nor the reads order the pair, so the record claims no phase. A site
+        // with sites staged under it keeps its phase, since its one-copy children's `a|.` GTs name
+        // its strands; so does a one-copy chain, whose GT shape says which strand it is on.
         return -1;
     }
     // `find`, since `operator[]` would insert a default 0 on a miss, and the map's size is not
