@@ -53,6 +53,10 @@ struct LinkageCounters {
     /// both of the parent's chosen alleles cross, which happens where the linkage pass could not
     /// revise the chain's ploidy, and those whose parent's chosen pair could not be read.
     std::atomic<size_t> nest_both{0}, nest_unreadable{0};
+
+    /// Phased strands whose panel haplotype carries an allele other than the strand's own, which
+    /// the model explains as a mutation (`Params::mutation`).
+    std::atomic<size_t> mutated_strands{0};
 };
 
 class LinkageModel {
@@ -71,10 +75,20 @@ public:
         double rho_min = 1e-3;
 
         /// Escape probability for each strand whose allele is unknown, because it copies the
-        /// wildcard haplotype or a panel haplotype that does not pass through the site. The
-        /// wildcard can carry any candidate allele, so a genotype that no panel pair spells
-        /// can still be called.
+        /// wildcard haplotype or a panel haplotype that does not pass through the site. Such a
+        /// strand can carry any candidate allele.
         double escape = 1e-2;
+
+        /// Li-Stephens mutation probability. A strand that copies a panel haplotype carries that
+        /// haplotype's allele with probability 1 - mutation, and each of the site's other alleles
+        /// with probability mutation / (alleles - 1). So an allele that no panel haplotype
+        /// carries is explained by a mutation on the haplotype the strand copies, and the strand
+        /// keeps copying it.
+        ///
+        /// 0 turns mutation off. The states then include the wildcard haplotype, which carries an
+        /// unknown allele at every site, and a strand reaches an allele no panel haplotype carries
+        /// only by switching to it and back. At most 0.5.
+        double mutation = 0.0;
 
         /// Exponent F on the allele-frequency prior that the states imply. The probability
         /// collected for a genotype that c ordered panel pairs spell is multiplied by c^(F-1). 1
@@ -153,6 +167,13 @@ public:
 
     LinkageModel(const Params& params) : params(params) {}
 
+    /// Whether the states include the wildcard haplotype: only when mutation is off.
+    bool has_wildcard() const { return params.mutation <= 0.0; }
+
+    /// Number of states per strand over a panel of `n_hap` haplotypes: the haplotypes, then the
+    /// wildcard where there is one.
+    size_t num_states(size_t n_hap) const { return n_hap + (has_wildcard() ? 1 : 0); }
+
     /// True when the model is on, that is, when its weight is positive. The caller checks this
     /// rather than running the model at weight 0.
     bool active() const { return params.weight > 0.0; }
@@ -181,7 +202,8 @@ public:
     };
 
     /// The wildcard haplotype's index. It can carry any allele at any site, so a strand
-    /// assigned to it is explained by no panel haplotype.
+    /// assigned to it is explained by no panel haplotype. With mutation on there is no wildcard
+    /// state, and the value only marks a strand for which no haplotype is named.
     static constexpr size_t WILDCARD = (size_t)-1;
 
     /// Whether the reference allele `ref` and another allele differ only in the length of one
@@ -200,8 +222,8 @@ public:
     ///
     /// `constraint[t]` is the genotype index the path must spell at site `t`, or `NO_CONSTRAINT`
     /// to leave the site free. Constraining every site to its chosen genotype makes the
-    /// phasing agree with the VCF. A constrained path always exists, because the wildcard can
-    /// carry any allele.
+    /// phasing agree with the VCF. A constrained path always exists, because a mutation, or
+    /// with mutation off the wildcard, can carry any allele.
     ///
     /// At `ploidy` 1 there is one strand, so the result gives only the panel haplotype it
     /// copies at each site, with `second` the wildcard. As for `posteriors()`, the two
@@ -267,7 +289,7 @@ private:
 
 
     /// Emission over single haplotypes for a haploid site: `e[a]` is the relative likelihood of
-    /// the allele haplotype `a` carries, with the wildcard last.
+    /// the allele haplotype `a` carries, with the wildcard, where there is one, last.
     void haploid_emission(const Site& site, size_t n_hap, vector<double>& e,
                           vector<double>& per_allele) const;
 
@@ -409,7 +431,9 @@ public:
         int trav_first = -1;
         int trav_second = -1;
         /// The panel haplotype each strand copies here, which the mosaic writes;
-        /// `LinkageModel::WILDCARD` where no panel haplotype explains the strand.
+        /// `LinkageModel::WILDCARD` where no panel haplotype is named for the strand. With
+        /// mutation on, a strand whose allele no panel haplotype carries still names the
+        /// haplotype it copies.
         size_t hap_first = LinkageModel::WILDCARD;
         size_t hap_second = LinkageModel::WILDCARD;
         /// 1 or 2. At 1 only the `_first` fields are meaningful: there is one strand.
@@ -567,6 +591,9 @@ public:
     size_t num_duplicate_live_keys() const { return duplicate_live_keys; }
 
     const LinkageModel::Params& model_params() const { return params; }
+
+    /// Phased strands so far that the model explained by a mutation (see `LinkageCounters`).
+    size_t mutated_strands() const { return model.counters.mutated_strands.load(); }
 
     /// Live entries that decode with a site-specific frequency exponent (`SiteContext::freq_prior`),
     /// for reporting.

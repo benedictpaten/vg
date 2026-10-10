@@ -1687,5 +1687,223 @@ TEST_CASE("A site's exponent survives the collector into the decode", "[linkage_
     }
 }
 
+
+//------------------------------------------------------------------------------
+// Mutation
+
+/// P(allele i | a strand whose haplotype carries `allele`), as `Params::mutation` defines it, written
+/// out case by case rather than through the model's base-plus-point-mass form.
+static double strand_p(int allele, size_t i, size_t n, double mutation, double escape) {
+    if (allele < 0) {
+        return escape / (double)n;
+    }
+    if (n == 1) {
+        return 1.0;
+    }
+    return (size_t)allele == i ? 1.0 - mutation : mutation / (double)(n - 1);
+}
+
+TEST_CASE("Mutation posteriors match a brute-force sum over paths and alleles", "[linkage_model]") {
+    // The model sums a state's emission over its strands' alleles in four terms, and splits each
+    // state's mass three ways for the frequency prior. At freq_prior 1 the split changes nothing,
+    // so the posteriors must equal a plain sum over every path and every ordered allele pair.
+    // Haplotype 2 does not pass through the first site, and no haplotype carries allele 2 at the
+    // second.
+    LinkageModel::Params p;
+    p.freq_prior = 1.0;
+    p.weight = 1.0;
+    p.mutation = 0.05;
+    p.escape = 0.02;
+    LinkageModel model(p);
+    const size_t n = 3, m = 3;
+    REQUIRE(model.num_states(3) == m);
+
+    LinkageModel::Site s1, s2;
+    s1.position = 1000;
+    s1.num_alleles = n;
+    s1.haplotype_allele = {0, 1, -1};
+    s1.genotype_ln_likelihood = {-1.0, -0.5, -3.0, -2.0, -4.0, -6.0};
+    s2.position = 1400;
+    s2.num_alleles = n;
+    s2.haplotype_allele = {0, 1, 1};
+    s2.genotype_ln_likelihood = {-5.0, -3.0, -4.0, -0.2, -2.5, -1.0};
+    const vector<LinkageModel::Site> sites{s1, s2};
+    auto post = model.posteriors(sites);
+
+    // joint(s, a, b, g): P(genotype g, reads | state (a, b)).
+    auto joint = [&](const LinkageModel::Site& s, size_t a, size_t b, size_t g) {
+        double v = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = 0; j < n; ++j) {
+                if (LinkageModel::genotype_index(i, j) == g) {
+                    v += strand_p(s.haplotype_allele[a], i, n, p.mutation, p.escape)
+                         * strand_p(s.haplotype_allele[b], j, n, p.mutation, p.escape)
+                         * exp(s.genotype_ln_likelihood[g]);
+                }
+            }
+        }
+        return v;
+    };
+    auto emission = [&](const LinkageModel::Site& s, size_t a, size_t b) {
+        double v = 0.0;
+        for (size_t g = 0; g < 6; ++g) {
+            v += joint(s, a, b, g);
+        }
+        return v;
+    };
+    const double rho = model.switch_probability(400);
+    auto step = [&](size_t from, size_t to) { return (from == to ? 1.0 - rho : 0.0) + rho / m; };
+
+    vector<vector<double>> want(2, vector<double>(6, 0.0));
+    for (size_t a1 = 0; a1 < m; ++a1) {
+        for (size_t b1 = 0; b1 < m; ++b1) {
+            for (size_t a2 = 0; a2 < m; ++a2) {
+                for (size_t b2 = 0; b2 < m; ++b2) {
+                    const double t = step(a1, a2) * step(b1, b2);
+                    for (size_t g = 0; g < 6; ++g) {
+                        want[0][g] += joint(s1, a1, b1, g) * t * emission(s2, a2, b2);
+                        want[1][g] += emission(s1, a1, b1) * t * joint(s2, a2, b2, g);
+                    }
+                }
+            }
+        }
+    }
+    for (size_t k = 0; k < 2; ++k) {
+        double total = 0.0;
+        for (double v : want[k]) {
+            total += v;
+        }
+        REQUIRE(post[k].size() == 6);
+        for (size_t g = 0; g < 6; ++g) {
+            REQUIRE(post[k][g] == Approx(want[k][g] / total).margin(1e-12));
+        }
+    }
+}
+
+TEST_CASE("Haploid mutation posteriors match a brute-force sum over paths and alleles",
+          "[linkage_model]") {
+    LinkageModel::Params p;
+    p.freq_prior = 1.0;
+    p.weight = 1.0;
+    p.mutation = 0.05;
+    p.escape = 0.02;
+    LinkageModel model(p);
+    const size_t n = 3, m = 3;
+
+    LinkageModel::Site s1, s2;
+    for (LinkageModel::Site* s : {&s1, &s2}) {
+        s->num_alleles = n;
+        s->ploidy = 1;
+    }
+    s1.position = 1000;
+    s1.haplotype_allele = {0, 1, -1};
+    s1.genotype_ln_likelihood = {-1.0, -0.5, -3.0};
+    s2.position = 1400;
+    s2.haplotype_allele = {0, 1, 1};
+    s2.genotype_ln_likelihood = {-5.0, -3.0, -0.2};
+    auto post = model.posteriors({s1, s2}, 1);
+
+    auto joint = [&](const LinkageModel::Site& s, size_t a, size_t i) {
+        return strand_p(s.haplotype_allele[a], i, n, p.mutation, p.escape)
+               * exp(s.genotype_ln_likelihood[i]);
+    };
+    auto emission = [&](const LinkageModel::Site& s, size_t a) {
+        return joint(s, a, 0) + joint(s, a, 1) + joint(s, a, 2);
+    };
+    const double rho = model.switch_probability(400);
+    vector<vector<double>> want(2, vector<double>(n, 0.0));
+    for (size_t a1 = 0; a1 < m; ++a1) {
+        for (size_t a2 = 0; a2 < m; ++a2) {
+            const double t = (a1 == a2 ? 1.0 - rho : 0.0) + rho / m;
+            for (size_t i = 0; i < n; ++i) {
+                want[0][i] += joint(s1, a1, i) * t * emission(s2, a2);
+                want[1][i] += emission(s1, a1) * t * joint(s2, a2, i);
+            }
+        }
+    }
+    for (size_t k = 0; k < 2; ++k) {
+        const double total = want[k][0] + want[k][1] + want[k][2];
+        REQUIRE(post[k].size() == n);
+        for (size_t i = 0; i < n; ++i) {
+            REQUIRE(post[k][i] == Approx(want[k][i] / total).margin(1e-12));
+        }
+    }
+}
+
+TEST_CASE("With mutation, a strand keeps its haplotype through an allele no haplotype carries",
+          "[linkage_model]") {
+    // Haplotypes 0 and 1 spell the call at every site but the middle one, where the call is 1/2
+    // and nothing carries allele 2. Without mutation that strand has to visit the wildcard and come
+    // back; with it, haplotype 0 carries allele 2 as a mutation and neither strand switches.
+    LinkageModel::Params p;
+    p.freq_prior = 0.0;
+    p.weight = 2.0;
+    p.mutation = 1e-3;
+    LinkageModel model(p);
+    vector<LinkageModel::Site> sites;
+    vector<size_t> want;
+    for (size_t i = 0; i < 5; ++i) {
+        if (i == 2) {
+            LinkageModel::Site s;
+            s.position = 1000 + i * 100;
+            s.num_alleles = 3;
+            s.genotype_ln_likelihood.assign(6, -20.0);
+            s.genotype_ln_likelihood[LinkageModel::genotype_index(1, 2)] = 0.0;
+            s.haplotype_allele = {0, 1, 0, 1};
+            sites.push_back(s);
+            want.push_back(LinkageModel::genotype_index(1, 2));
+        } else {
+            sites.push_back(biallelic(1000 + i * 100, -20.0, 0.0, -20.0,
+                                      i % 2 ? vector<int>{0, 1, 1, 0} : vector<int>{0, 1, 0, 1}));
+            want.push_back(LinkageModel::genotype_index(0, 1));
+        }
+    }
+    auto ph = model.phasing(sites, want);
+    REQUIRE(ph.size() == sites.size());
+    for (size_t t = 0; t < ph.size(); ++t) {
+        REQUIRE(ph[t].first != LinkageModel::WILDCARD);
+        REQUIRE(ph[t].second != LinkageModel::WILDCARD);
+    }
+    REQUIRE(count_switches(ph) == 0);
+    // The strands are haplotypes 0 and 1, in either order.
+    REQUIRE(min(ph[0].first, ph[0].second) == 0);
+    REQUIRE(max(ph[0].first, ph[0].second) == 1);
+
+    // Without mutation, the same call goes through the wildcard.
+    LinkageModel::Params off = p;
+    off.mutation = 0.0;
+    auto wild = LinkageModel(off).phasing(sites, want);
+    REQUIRE((wild[2].first == LinkageModel::WILDCARD || wild[2].second == LinkageModel::WILDCARD));
+}
+
+TEST_CASE("A het whose other allele is a mutation on either of two like haplotypes has no order",
+          "[linkage_model]") {
+    // Every haplotype carries allele 0 at the middle site, and the call there is 0/1. Either strand
+    // could have mutated, so the panel does not order the pair, and the PhaseCall says so; both
+    // strands still name the haplotypes they copy.
+    LinkageModel::Params p;
+    p.freq_prior = 0.0;
+    p.weight = 2.0;
+    p.mutation = 1e-3;
+    LinkageCollector c(p, 4);
+    const vector<double> het{-20.0, 0.0, -20.0};
+    record_dense(c, "chr1", 1000, 2, het, {0, 1, 0, 1}, 0, 1, 1, 1.0);
+    record_dense(c, "chr1", 1100, 2, het, {0, 0, 0, 0}, 0, 1, 2, 1.0);
+    record_dense(c, "chr1", 1200, 2, het, {0, 1, 0, 1}, 0, 1, 3, 1.0);
+    vector<LinkageCollector::PhaseCall> phasing;
+    c.resolve(&phasing);
+    const LinkageCollector::PhaseCall* mid = nullptr;
+    for (const auto& pc : phasing) {
+        if (pc.record_key == 2) {
+            mid = &pc;
+        }
+    }
+    REQUIRE(mid != nullptr);
+    REQUIRE(mid->order_arbitrary);
+    REQUIRE(mid->hap_first != LinkageModel::WILDCARD);
+    REQUIRE(mid->hap_second != LinkageModel::WILDCARD);
+    REQUIRE(c.mutated_strands() == 1);
+}
+
 }
 }

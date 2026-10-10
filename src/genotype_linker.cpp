@@ -576,6 +576,13 @@ void GenotypeLinker::report() const {
              << " live entries decoded at a run-length site's own frequency exponent (--hp-prior)"
              << endl;
     }
+    if (model->model_params().mutation > 0.0) {
+        // The count the wildcard gave before: strands whose allele their panel haplotype does not
+        // carry.
+        cerr << "[vg call] linkage: " << model->mutated_strands()
+             << " phased strands carry an allele other than their panel haplotype's, explained as"
+             << " a mutation (--linkage-mutation)" << endl;
+    }
 }
 
 }

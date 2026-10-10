@@ -182,6 +182,10 @@ void help_call(char** argv) {
          << "      --linkage-scale N     distance scale of linkage decay, in bp [10000]" << endl
          << "      --linkage-prior F     exponent on the haplotypes' allele-frequency prior" << endl
          << "                            [5]" << endl
+         << "      --linkage-mutation P  chance that a strand carries another allele than the" << endl
+         << "                            haplotype it copies, so that an allele no haplotype" << endl
+         << "                            carries is a mutation on one; 0 uses a wildcard" << endl
+         << "                            haplotype instead [" << LinkageModel::Params().mutation << "]" << endl
          << "      --hp-prior F          exponent used instead of --linkage-prior where an" << endl
          << "                            allele differs from the reference only in the" << endl
          << "                            length of a homopolymer run; 0 disables it [0]" << endl
@@ -477,6 +481,7 @@ int main_call(int argc, char** argv) {
     bool linkage_weight_explicit = false;
     double linkage_scale = 10000.0;
     double linkage_freq_prior = 5.0;
+    double linkage_mutation = LinkageModel::Params().mutation;
     double hp_prior = 0.0;
     bool hp_prior_explicit = false;
     int hp_prior_run = 11;
@@ -538,6 +543,7 @@ int main_call(int argc, char** argv) {
     constexpr int OPT_MAX_SNARL_EDGES = 1109;
     constexpr int OPT_HP_PRIOR = 1110;
     constexpr int OPT_HP_PRIOR_RUN = 1111;
+    constexpr int OPT_LINKAGE_MUTATION = 1113;
     constexpr int OPT_DEPTH_TERM = 1025;
     constexpr int OPT_DEPTH_COUNT_RAW = 1026;
     constexpr int OPT_DEPTH_QUALITY = 1027;
@@ -674,6 +680,7 @@ int main_call(int argc, char** argv) {
             {"linkage-weight", required_argument, 0, OPT_LINKAGE_WEIGHT},
             {"linkage-scale", required_argument, 0, OPT_LINKAGE_SCALE},
             {"linkage-prior", required_argument, 0, OPT_LINKAGE_FREQ_PRIOR},
+            {"linkage-mutation", required_argument, 0, OPT_LINKAGE_MUTATION},
             {"hp-prior", required_argument, 0, OPT_HP_PRIOR},
             {"hp-prior-run", required_argument, 0, OPT_HP_PRIOR_RUN},
             {"enumerate-support", no_argument, 0, OPT_ENUMERATE_SUPPORT},
@@ -1092,6 +1099,9 @@ int main_call(int argc, char** argv) {
         case OPT_LINKAGE_FREQ_PRIOR:
             linkage_freq_prior = parse<double>(optarg);
             break;
+        case OPT_LINKAGE_MUTATION:
+            linkage_mutation = parse<double>(optarg);
+            break;
         case OPT_HP_PRIOR:
             hp_prior = parse<double>(optarg);
             hp_prior_explicit = true;
@@ -1263,6 +1273,10 @@ int main_call(int argc, char** argv) {
     // genotyped, so we can afford to look for more of them.
     max_yens_traversals = traversals_only ? 100 : 50;
 
+    if (!(linkage_mutation >= 0.0 && linkage_mutation <= 0.5)) {
+        cerr << "error [vg call]: --linkage-mutation takes a probability from 0 to 0.5" << endl;
+        return 1;
+    }
     if (hp_prior < 0.0 || hp_prior_run < 1) {
         cerr << "error [vg call]: --hp-prior takes a value >= 0, and --hp-prior-run a run of at least 1"
              << endl;
@@ -2740,6 +2754,7 @@ int main_call(int argc, char** argv) {
                 linkage_params.weight = linkage_weight;
                 linkage_params.scale = linkage_scale;
                 linkage_params.freq_prior = linkage_freq_prior;
+                linkage_params.mutation = linkage_mutation;
                 linkage_params.hp_prior = hp_prior;
                 linkage_params.hp_prior_run = (size_t)hp_prior_run;
                 linkage_collector.reset(new LinkageCollector(linkage_params, hap_index.size()));
